@@ -3,7 +3,7 @@ import requests
 import pandas as pd
 import matplotlib.pyplot as plt
 from datetime import datetime
-
+#test
 # 1. Get daily stock price data (adjusted for splits)
 def get_stock_data(ticker, start_date='2010-01-01', end_date=None):
     if not end_date:
