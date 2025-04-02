@@ -19,11 +19,12 @@ def get_stock_data(ticker, start_date='2010-01-01', end_date=None):
 
 # ========================
 # 2. Download EDGAR Filings
+# (email is the first parameter)
 # ========================
-def download_filings(ticker, filing_type="10-Q", num_filings=8, download_folder="sec_filings", email="mattcarlson39@gmail.com"):
+def download_filings(email, ticker, filing_type="10-Q", num_filings=8, download_folder="sec-edgar-filings"):
     # Initialize the downloader with your email
     dl = Downloader(download_folder, email)
-    # Call get() without the extra parameter.
+    # Download filings using filing_type and ticker (do not pass extra parameters)
     dl.get(filing_type, ticker)
     ticker_folder = os.path.join(download_folder, ticker, filing_type)
     if not os.path.exists(ticker_folder):
@@ -37,35 +38,48 @@ def download_filings(ticker, filing_type="10-Q", num_filings=8, download_folder=
     return filing_paths
 
 # ========================
-# 3. Parse XBRL Instance Document for Net Income and Report Date
+# 3. Parse Filing Folder for Net Income and Report Date
 # ========================
 def parse_xbrl_for_net_income(filing_folder):
-    # Look for an instance document (XML file) in the filing folder
+    # Try to find an instance document with a .xml extension first.
     instance_file = None
     for file in os.listdir(filing_folder):
         if file.endswith(".xml"):
             instance_file = os.path.join(filing_folder, file)
             break
+    # If no .xml file is found, try to use full-submission.txt (case-insensitive)
     if instance_file is None:
-        print(f"No instance XML file found in {filing_folder}.")
+        for file in os.listdir(filing_folder):
+            if file.lower() == "full-submission.txt":
+                instance_file = os.path.join(filing_folder, file)
+                break
+    if instance_file is None:
+        print(f"No instance file found in {filing_folder}.")
         return None, None
 
     with open(instance_file, 'r', encoding='utf-8') as f:
         content = f.read()
 
-    soup = BeautifulSoup(content, 'lxml')
-    # Look for a tag whose name ends with 'NetIncomeLoss' (common in US GAAP filings)
+    # Attempt to parse as XML first; if that fails, try as HTML.
+    try:
+        soup = BeautifulSoup(content, 'lxml')
+    except Exception as e:
+        print(f"Error parsing {instance_file} with lxml: {e}. Trying html.parser.")
+        soup = BeautifulSoup(content, 'html.parser')
+
+    # Look for a tag whose name ends with 'NetIncomeLoss' (case-insensitive)
     net_income_tag = soup.find(lambda tag: tag.name.lower().endswith("netincomeloss"))
     if net_income_tag and net_income_tag.text:
         try:
             net_income = float(net_income_tag.text.strip().replace(',', ''))
         except Exception as e:
-            print(f"Error parsing net income: {e}")
+            print(f"Error converting net income to float in {instance_file}: {e}")
             net_income = None
     else:
         net_income = None
 
-    # Extract report period from the first context's endDate, if available
+    # Extract report period from the first context's endDate, if available.
+    # Some filings may not have xbrli:context; if not, try to search for an alternative.
     context = soup.find("xbrli:context")
     report_period = None
     if context:
@@ -74,16 +88,32 @@ def parse_xbrl_for_net_income(filing_folder):
             try:
                 report_period = pd.to_datetime(end_date_tag.text.strip())
             except Exception as e:
-                print(f"Error parsing report period: {e}")
+                print(f"Error parsing report period in {instance_file}: {e}")
+                report_period = None
+    else:
+        # As a fallback, try to find a tag with "PeriodEnd" or similar
+        possible_date_tag = soup.find(lambda tag: "periodend" in tag.text.lower())
+        if possible_date_tag:
+            try:
+                report_period = pd.to_datetime(possible_date_tag.text.strip())
+            except Exception as e:
+                print(f"Error parsing fallback report period: {e}")
                 report_period = None
 
     return net_income, report_period
 
 # ========================
-# 4. Build Quarterly Financials DataFrame from EDGAR
+# 4b. Build Quarterly Financials DataFrame from EDGAR
 # ========================
-def build_quarterly_financials(ticker, filing_type="10-Q", num_filings=8, download_folder="sec_filings", email="mattcarlson39@gmail.com"):
-    filing_paths = download_filings(ticker, filing_type, num_filings, download_folder, email)
+def build_quarterly_financials(email, ticker, filing_type="10-Q", num_filings=8, download_folder="sec-edgar-filings"):
+    filing_paths = download_filings(email, ticker, filing_type, num_filings, download_folder)
+    # If no filings found for 10-Q, try 10-K
+    if not filing_paths:
+        print(f"No filings found for {ticker} for {filing_type}. Trying 10-K instead.")
+        filing_paths = download_filings(email, ticker, "10-K", num_filings, download_folder)
+        if not filing_paths:
+            print(f"No filings found for {ticker} for 10-K either.")
+            return None
     records = []
     for path in filing_paths:
         net_income, report_period = parse_xbrl_for_net_income(path)
@@ -109,7 +139,7 @@ def calculate_ttm_eps_edgar(quarterly_df, shares_outstanding):
     return ttm_df[['TTM_EPS']]
 
 # ========================
-# 6. Align TTM EPS with Daily Price Data and Compute P/E
+# 6b. Align TTM EPS with Daily Price Data and Compute P/E
 # ========================
 def align_eps_with_prices(daily_df, eps_df):
     if eps_df is None or eps_df.empty:
@@ -150,13 +180,13 @@ def plot_pe_ratios(ticker_pe_dict):
 def main():
     tickers = ['AAPL', 'MSFT', 'GOOGL']  # Add more tickers as needed
     email = "mattcarlson39@gmail.com"  # Replace with your actual email for EDGAR requests
-    download_folder = "sec_filings"
+    download_folder = "sec-edgar-filings"
     ticker_pe_dict = {}
 
     for ticker in tickers:
         print(f"\nProcessing {ticker} with EDGAR fundamentals...")
         daily_prices = get_stock_data(ticker, start_date='2010-01-01')
-        quarterly_financials = build_quarterly_financials(ticker, filing_type="10-Q", num_filings=8, download_folder=download_folder, email=email)
+        quarterly_financials = build_quarterly_financials(email, ticker, filing_type="10-Q", num_filings=8, download_folder=download_folder)
         if quarterly_financials is None:
             print(f"Skipping {ticker} due to missing EDGAR financial data.")
             continue
