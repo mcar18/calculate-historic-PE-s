@@ -2,7 +2,7 @@ import yfinance as yf
 import pandas as pd
 import matplotlib.pyplot as plt
 from datetime import datetime
-#test
+#test2
 # 1. Get daily stock price data (adjusted for splits) using yfinance's "max" period.
 def get_stock_data(ticker):
     stock = yf.Ticker(ticker)
