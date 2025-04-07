@@ -6,7 +6,7 @@ import os
 from sec_edgar_downloader import Downloader
 from bs4 import BeautifulSoup
 #we aren't trading for the probabilty P that a stock will be within its confidence interval by that date, 
-#we are predicting that probability P that the TRADE will have moved in a positive direction from between entering and the conditions required to exit before the stock moves outside its confidence interval. 
+#we are predicting that probability P that the TRADE  will have moved in a positive direction from between entering and the conditions required to exit before the stock moves outside its confidence interval. 
 #And we should use certain exit conditions as preventative measures if a stock gets too close to that range.  
 # ========================
 # 1. Get Daily Price Data from yfinance
