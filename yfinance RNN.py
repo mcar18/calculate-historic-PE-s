@@ -87,7 +87,7 @@ model.add(Dense(units=25))
 model.add(Dense(units=1))
 
 model.compile(optimizer='adam', loss='mean_squared_error')
-model.fit(x_train, y_train, batch_size=32, epochs=30)
+model.fit(x_train, y_train, batch_size=32, epochs=10)
 
 # -----------------------------
 # 5. Testing and Prediction
