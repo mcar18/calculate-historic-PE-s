@@ -153,7 +153,7 @@ plt.show()
 # -----------------------------
 # Multi-Output Forecasting Setup
 # -----------------------------
-forecast_horizon = 5  # For example, predict the next 5 days
+forecast_horizon = 15  # For example, predict the next 5 days
 
 # To build multi-output data, adjust the training samples creation.
 x_train_multi, y_train_multi = [], []
