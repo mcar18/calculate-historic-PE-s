@@ -16,7 +16,7 @@ tickers = ['AAPL', 'MSFT', 'GOOG']  # Sample tickers
 start_date = '2010-01-01'
 end_date   = '2020-12-31'
 sequence_length = 60     # Number of prior days used as input
-forecast_horizon = 5     # For multi-step forecast: predict 5 days ahead
+forecast_horizon = 15     # For multi-step forecast: predict 5 days ahead
 
 # Root folder where forecasts and charts will be saved.
 output_root = 'RNN forecasts'
