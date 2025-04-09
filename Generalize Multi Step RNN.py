@@ -12,17 +12,17 @@ from tensorflow.keras.layers import LSTM, Dropout, Dense
 # SETTINGS
 # -----------------------------
 # List of tickers to analyze. Expand this list as desired.
-tickers = ['AAPL', 'MSFT', 'GOOG']  # Sample tickers
+tickers = ['AAPL', 'MSFT', 'GOOG']  # Example tickers
 start_date = '2010-01-01'
 end_date   = '2020-12-31'
-sequence_length = 120     # Number of prior days used as input
-forecast_horizon = 15     # For multi-step forecast: predict 5 days ahead
+sequence_length = 60     # Number of prior days used as input
+forecast_horizon = 5     # For multi-step forecast: predict 5 days ahead
 
 # Root folder where forecasts and charts will be saved.
 output_root = 'RNN forecasts'
 os.makedirs(output_root, exist_ok=True)
 
-# Create an empty dictionary to collect summary metrics.
+# Dictionary for summary metrics
 summary_stats = {}
 
 # -----------------------------
@@ -32,10 +32,10 @@ for ticker in tickers:
     print("\n" + "=" * 60)
     print(f"Processing data for ticker: {ticker}")
     
-    # Create folder for the current ticker.
+    # Create a folder for the current ticker.
     ticker_folder = os.path.join(output_root, ticker)
     os.makedirs(ticker_folder, exist_ok=True)
-
+    
     # -----------------------------
     # 1. Download Data and Prepare Features (Close & Volume)
     # -----------------------------
@@ -44,7 +44,7 @@ for ticker in tickers:
     print("Data downloaded. DataFrame columns:")
     print(data.columns)
     
-    # Handle potential MultiIndex columns by extracting both 'Close' and 'Volume'
+    # Handle potential MultiIndex columns (yfinance sometimes returns a MultiIndex):
     if isinstance(data.columns, pd.MultiIndex):
         print("Detected MultiIndex columns. Extracting 'Close' and 'Volume'...")
         if 'Close' in data.columns.levels[0] and 'Volume' in data.columns.levels[0]:
@@ -71,7 +71,7 @@ for ticker in tickers:
             df = data[['Adj Close', 'Volume']].copy()
             df.rename(columns={'Adj Close': 'Close'}, inplace=True)
         else:
-            raise ValueError("Required columns ('Close' and 'Volume') not found.")
+            raise ValueError("Required columns ('Close' and 'Volume') not found in data.")
     
     print("DataFrame head:")
     print(df.head())
@@ -80,8 +80,7 @@ for ticker in tickers:
     # -----------------------------
     # 2. Scaling
     # -----------------------------
-    # For features, we use both Close and Volume.
-    # For the target, we use only Close.
+    # Features: both Close and Volume; Target: Close only.
     features = df[['Close', 'Volume']].values
     target   = df[['Close']].values
     
@@ -101,9 +100,8 @@ for ticker in tickers:
     print("Training data length (rows):", training_data_len)
     
     # -------------------------------------------------------------------
-    # SECTION A: ONE-STEP FORECAST
+    # SECTION A: ONE-STEP FORECAST (Predict next day Close)
     # -------------------------------------------------------------------
-    # Prepare training data: each sample uses the previous `sequence_length` days to predict the next day's close.
     train_features = scaled_features[:training_data_len, :]   # shape: (train_rows, 2)
     train_target   = scaled_target[:training_data_len, :]       # shape: (train_rows, 1)
     
@@ -117,14 +115,14 @@ for ticker in tickers:
     print("x_train (one-step) shape:", x_train.shape)
     print("y_train (one-step) shape:", y_train.shape)
     
-    # Build one-step forecasting LSTM model.
+    # Build the one-step forecasting model.
     model_one_step = Sequential()
     model_one_step.add(LSTM(units=50, return_sequences=True, input_shape=(x_train.shape[1], x_train.shape[2])))
     model_one_step.add(Dropout(0.2))
     model_one_step.add(LSTM(units=50, return_sequences=False))
     model_one_step.add(Dropout(0.2))
     model_one_step.add(Dense(units=25))
-    model_one_step.add(Dense(units=1))  # Output: next day's close.
+    model_one_step.add(Dense(units=1))  # Output: next day's close
     
     model_one_step.compile(optimizer='adam', loss='mean_squared_error')
     print(f"\nOne-Step Model summary for {ticker}:")
@@ -141,15 +139,14 @@ for ticker in tickers:
     x_test = np.array(x_test)
     print("x_test (one-step) shape:", x_test.shape)
     
-    # Actual unscaled test target values.
-    y_test = target[training_data_len:, :]
+    y_test = target[training_data_len:, :]  # Actual unscaled close prices
     
-    # Make predictions and inverse transform.
+    # Predict and inverse transform predictions.
     predictions_one_step = model_one_step.predict(x_test)
     predictions_one_step_inv = scaler_target.inverse_transform(predictions_one_step)
     print("Predictions (one-step) shape:", predictions_one_step_inv.shape)
     
-    # Accuracy Metrics for one-step.
+    # Accuracy metrics for one-step forecasts.
     mae_one = mean_absolute_error(y_test, predictions_one_step_inv)
     mse_one = mean_squared_error(y_test, predictions_one_step_inv)
     rmse_one = np.sqrt(mse_one)
@@ -160,7 +157,7 @@ for ticker in tickers:
     print(f"RMSE: {rmse_one:.4f}")
     print(f"MAPE: {mape_one:.2f}%")
     
-    # Save the one-step forecast chart as a PDF.
+    # Save One-Step Forecast Chart as PDF.
     plt.figure(figsize=(14, 7))
     plt.title('Stock Price Prediction (Test Data) - One Step Forecast')
     plt.xlabel('Date')
@@ -174,10 +171,8 @@ for ticker in tickers:
     print(f"One-Step Forecast chart saved to {one_step_pdf}")
     
     # -------------------------------------------------------------------
-    # SECTION B: MULTI-STEP FORECAST (5-Day Horizon)
+    # SECTION B: MULTI-STEP FORECAST (Predict next 5 days Close)
     # -------------------------------------------------------------------
-    # Prepare multi-step training data: each sample uses the previous `sequence_length` days
-    # to predict a vector of the next `forecast_horizon` days of close prices.
     x_train_multi = []
     y_train_multi = []
     for i in range(sequence_length, len(train_features) - forecast_horizon + 1):
@@ -189,14 +184,14 @@ for ticker in tickers:
     print("x_train_multi shape:", x_train_multi.shape)    # Expected: (samples, 60, 2)
     print("y_train_multi shape:", y_train_multi.shape)      # Expected: (samples, forecast_horizon)
     
-    # Build multi-step forecasting LSTM model.
+    # Build the multi-step forecasting model.
     model_multi_step = Sequential()
     model_multi_step.add(LSTM(units=50, return_sequences=True, input_shape=(x_train_multi.shape[1], x_train_multi.shape[2])))
     model_multi_step.add(Dropout(0.2))
     model_multi_step.add(LSTM(units=50, return_sequences=False))
     model_multi_step.add(Dropout(0.2))
     model_multi_step.add(Dense(units=25))
-    model_multi_step.add(Dense(units=forecast_horizon))  # Output: vector for next 5 days.
+    model_multi_step.add(Dense(units=forecast_horizon))  # Output: vector for next 5 days
     
     model_multi_step.compile(optimizer='adam', loss='mean_squared_error')
     print(f"\nMulti-Step Model summary for {ticker}:")
@@ -205,7 +200,7 @@ for ticker in tickers:
     print(f"Training multi-step forecast model for {ticker}...")
     model_multi_step.fit(x_train_multi, y_train_multi, batch_size=32, epochs=10, verbose=1)
     
-    # Prepare multi-step test data.
+    # Prepare test data for multi-step forecast.
     test_features_multi = scaled_features[training_data_len - sequence_length:, :]
     x_test_multi = []
     y_test_multi = []
@@ -217,14 +212,14 @@ for ticker in tickers:
     print("x_test_multi shape:", x_test_multi.shape)
     print("y_test_multi shape:", y_test_multi.shape)
     
-    # Predictions for multi-step model.
+    # Predict multi-step outputs.
     predictions_multi = model_multi_step.predict(x_test_multi)
-    # Inverse transform the predictions and test targets (note: scaler_target expects 2D arrays).
+    # Inverse transform: scaler_target expects 2D arrays.
     predictions_multi_inv = scaler_target.inverse_transform(predictions_multi)
     y_test_multi_inv = scaler_target.inverse_transform(y_test_multi)
     print("Multi-step predictions shape:", predictions_multi_inv.shape)
     
-    # Aggregate accuracy metrics for multi-step.
+    # Accuracy metrics for multi-step forecasts (aggregated over all forecast horizons).
     mae_multi = mean_absolute_error(y_test_multi_inv.flatten(), predictions_multi_inv.flatten())
     mse_multi = mean_squared_error(y_test_multi_inv.flatten(), predictions_multi_inv.flatten())
     rmse_multi = np.sqrt(mse_multi)
@@ -235,7 +230,7 @@ for ticker in tickers:
     print(f"RMSE: {rmse_multi:.4f}")
     print(f"MAPE: {mape_multi:.2f}%")
     
-    # Save the multi-step forecast chart for one test sample (using the first sample) as a PDF.
+    # Save Multi-Step Forecast Chart (for one sample) as PDF.
     sample_index = 0
     plt.figure(figsize=(10, 5))
     plt.title('Multi-Step Forecast for One Test Sample')
@@ -250,16 +245,15 @@ for ticker in tickers:
     plt.close()
     print(f"Multi-Step Forecast chart saved to {multi_step_pdf}")
     
-    # Collect the summary statistics for this ticker.
+    # Collect summary statistics for this ticker.
     summary_stats[ticker] = {
         "Single Step": {"MAE": mae_one, "RMSE": rmse_one, "MAPE": mape_one},
         "Multi-Step":  {"MAE": mae_multi, "RMSE": rmse_multi, "MAPE": mape_multi}
     }
 
 # -----------------------------
-# FINAL: Summary Table for All Tickers
+# FINAL: Build and Print Summary Table
 # -----------------------------
-# Build a list of rows to later convert to a DataFrame.
 rows = []
 for ticker, stats in summary_stats.items():
     row = {("Single Step", "MAE"): stats["Single Step"]["MAE"],
@@ -271,17 +265,32 @@ for ticker, stats in summary_stats.items():
            "Ticker": ticker}
     rows.append(row)
 
-# Create a DataFrame with Ticker as index.
 df_summary = pd.DataFrame(rows)
 df_summary.set_index("Ticker", inplace=True)
-
-# Sort the columns into a multi-index:
 df_summary.columns = pd.MultiIndex.from_tuples(df_summary.columns)
+
+# Append an "Average" row for MAPE values.
+avg_single_mape = df_summary[("Single Step", "MAPE")].mean()
+avg_multi_mape  = df_summary[("Multi-Step", "MAPE")].mean()
+
+avg_row = {
+    ("Single Step", "MAE"): np.nan,
+    ("Single Step", "RMSE"): np.nan,
+    ("Single Step", "MAPE"): avg_single_mape,
+    ("Multi-Step", "MAE"): np.nan,
+    ("Multi-Step", "RMSE"): np.nan,
+    ("Multi-Step", "MAPE"): avg_multi_mape
+}
+df_summary.loc["Average"] = avg_row
+
+# Reindex to move "Average" row to the bottom.
+new_index = list(df_summary.index[df_summary.index != "Average"]) + ["Average"]
+df_summary = df_summary.reindex(new_index)
 
 print("\nSummary Table of Accuracy Metrics for All Tickers:")
 print(df_summary.to_string(float_format="%.4f"))
 
-# Optionally, save the summary table to a CSV.
+# Optionally, save the summary table to CSV.
 summary_csv = os.path.join(output_root, "Summary_Accuracy_Metrics.csv")
 df_summary.to_csv(summary_csv)
 print(f"\nSummary table saved to {summary_csv}")
