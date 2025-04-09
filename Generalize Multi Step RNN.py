@@ -15,8 +15,8 @@ from tensorflow.keras.layers import LSTM, Dropout, Dense
 tickers = ['AAPL', 'MSFT', 'GOOG','MA','V','NVDA', 'AMD', 'TSLA','AXP','KO','CRM','PLTR','SHOP','COST']  # Example tickers ['AAPL', 'MSFT', 'GOOG']
 start_date = '2010-01-01'
 end_date   = '2020-12-31'
-sequence_length = 90     # Number of prior days used as input
-forecast_horizon = 90     # For multi-step forecast: predict 5 days ahead
+sequence_length = 60     # Number of prior days used as input
+forecast_horizon = 10     # For multi-step forecast: predict 5 days ahead
 
 # Root folder where forecasts and charts will be saved.
 output_root = 'RNN forecasts'
