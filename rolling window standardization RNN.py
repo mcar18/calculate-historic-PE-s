@@ -13,7 +13,7 @@ from tensorflow.keras.layers import LSTM, Dropout, Dense
 # -----------------------------
 # SETTINGS
 # -----------------------------
-tickers = ['SPY', 'AAPL', 'MSFT']  # Expand this list as needed
+tickers = ['SPY', 'AAPL', 'MSFT', 'MA','V','AXP','CRM','GOOG','NVDA','PLTR','TSLA']  # Expand this list as needed
 start_date = '2010-01-01'
 end_date   = '2020-12-31'
 sequence_length = 60      # Number of prior days used as input
