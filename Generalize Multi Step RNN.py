@@ -2,6 +2,8 @@ import os
 import yfinance as yf
 import numpy as np
 import pandas as pd
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import mean_absolute_error, mean_squared_error
@@ -12,7 +14,7 @@ from tensorflow.keras.layers import LSTM, Dropout, Dense
 # SETTINGS
 # -----------------------------
 # List of tickers to analyze. Expand this list as desired.
-tickers = ['AAPL', 'MSFT', 'GOOG']  # Example tickers   ['AAPL', 'MSFT', 'GOOG','MA','V','NVDA', 'AMD', 'TSLA','AXP','KO','CRM','PLTR','SHOP','COST']
+tickers = ['SPY']  # Example tickers   ['AAPL', 'MSFT', 'GOOG','MA','V','NVDA', 'AMD', 'TSLA','AXP','KO','CRM','PLTR','SHOP','COST']
 start_date = '2010-01-01'
 end_date   = '2020-12-31'
 sequence_length = 60     # Number of prior days used as input
