@@ -3,7 +3,7 @@ import yfinance as yf
 import numpy as np
 import pandas as pd
 import matplotlib
-matplotlib.use('Agg')  # Use a non-interactive backend
+matplotlib.use('Agg')  # Non-interactive backend
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import RobustScaler
 from sklearn.metrics import mean_absolute_error, mean_squared_error
@@ -21,31 +21,44 @@ forecast_horizon = 10     # Predict next 10 days (for multi-step)
 output_root = 'RNN forecasts'
 os.makedirs(output_root, exist_ok=True)
 
-# Choose scaling method: "robust" for global RobustScaler, "rolling" for rolling window normalization.
-scaling_method = "rolling"  # or set to "robust"
-rolling_window_size = 20    # Used only if scaling_method is "rolling"
+# Choose scaling method: "robust" (global) or "rolling" (rolling window normalization)
+scaling_method = "rolling"  # Change to "robust" for global scaling
+rolling_window_size = 20    # Window size for rolling normalization
+
+# Feature and target column names:
+feature_cols = ['Close', 'Volume', 'Volume_MA20', 'Volume_Ratio',
+                'MA20', 'MA50', 'MA200', 'Pct_Move',
+                'SPY_Close', 'SPY_MA20', 'SPY_MA50', 'SPY_MA200']
+target_col = ['Close']
 
 # -----------------------------
-# Function for rolling normalization
+# Function: Rolling Window Normalization
 # -----------------------------
 def rolling_normalize_columns(df, cols, window):
+    """
+    For each column in cols, computes the rolling median and IQR over the specified window,
+    and returns a normalized DataFrame along with DataFrames of the rolling medians and IQRs.
+    """
     df_norm = df.copy()
-    # Compute rolling median and IQR per column and normalize each column.
+    median_dict = {}
+    iqr_dict = {}
     for col in cols:
         median = df[col].rolling(window=window, min_periods=window).median()
         q75 = df[col].rolling(window=window, min_periods=window).quantile(0.75)
         q25 = df[col].rolling(window=window, min_periods=window).quantile(0.25)
         iqr = q75 - q25
         df_norm[col] = (df[col] - median) / iqr
-    return df_norm.dropna()
-
-# List of feature column names (will be used later)
-feature_cols = ['Close', 'Volume', 'Volume_MA20', 'Volume_Ratio', 'MA20', 'MA50', 'MA200', 'Pct_Move',
-                'SPY_Close', 'SPY_MA20', 'SPY_MA50', 'SPY_MA200']
-target_col = ['Close']
+        median_dict[col] = median
+        iqr_dict[col] = iqr
+    df_norm = df_norm.dropna()
+    median_df = pd.DataFrame({col: median_dict[col] for col in cols})
+    iqr_df = pd.DataFrame({col: iqr_dict[col] for col in cols})
+    median_df = median_df.loc[df_norm.index]
+    iqr_df = iqr_df.loc[df_norm.index]
+    return df_norm, median_df, iqr_df
 
 # -----------------------------
-# Download and Process SPY Data Once
+# Download SPY Data and Compute Its Moving Averages
 # -----------------------------
 print("Downloading SPY data...")
 spy_data = yf.download("SPY", start=start_date, end=end_date)
@@ -59,7 +72,6 @@ if isinstance(spy_data.columns, pd.MultiIndex):
 else:
     spy_data = spy_data[['Close']].copy()
     spy_data.rename(columns={'Close': 'SPY_Close'}, inplace=True)
-
 # Compute SPY moving averages
 spy_data['SPY_MA20'] = spy_data['SPY_Close'].rolling(window=20).mean()
 spy_data['SPY_MA50'] = spy_data['SPY_Close'].rolling(window=50).mean()
@@ -67,7 +79,7 @@ spy_data['SPY_MA200'] = spy_data['SPY_Close'].rolling(window=200).mean()
 spy_data.dropna(inplace=True)
 print("SPY data downloaded and processed with moving averages.")
 
-# Dictionary for summary metrics
+# Dictionary to collect summary metrics
 summary_stats = {}
 
 # -----------------------------
@@ -77,7 +89,7 @@ for ticker in tickers:
     print("\n" + "="*60)
     print(f"Processing data for ticker: {ticker}")
     
-    # Create folder for the current ticker.
+    # Create ticker folder
     ticker_folder = os.path.join(output_root, ticker)
     os.makedirs(ticker_folder, exist_ok=True)
     
@@ -86,10 +98,10 @@ for ticker in tickers:
     # -----------------------------
     print(f"Downloading data for {ticker} from {start_date} to {end_date}...")
     data = yf.download(ticker, start=start_date, end=end_date)
-    print("Data downloaded. DataFrame columns:")
+    print("Data downloaded. Columns:")
     print(data.columns)
     
-    # Handle potential MultiIndex columns:
+    # Handle MultiIndex if needed
     if isinstance(data.columns, pd.MultiIndex):
         print("Detected MultiIndex columns. Extracting 'Close' and 'Volume'...")
         if 'Close' in data.columns.levels[0] and 'Volume' in data.columns.levels[0]:
@@ -101,8 +113,8 @@ for ticker in tickers:
                                    'Volume': df_volume[ticker]})
             else:
                 print("Ticker not found in sub-columns; using first available columns.")
-                df = pd.DataFrame({'Close': df_close.iloc[:, 0],
-                                   'Volume': df_volume.iloc[:, 0]})
+                df = pd.DataFrame({'Close': df_close.iloc[:,0],
+                                   'Volume': df_volume.iloc[:,0]})
         else:
             raise ValueError("MultiIndex detected but required columns not found.")
     else:
@@ -119,28 +131,30 @@ for ticker in tickers:
     print("DataFrame shape:", df.shape)
     
     # -----------------------------
-    # 2. Compute Additional Features
+    # 2. Additional Features
     # -----------------------------
-    # Ticker's moving averages of Close.
+    # Ticker’s moving averages
     df['MA20'] = df['Close'].rolling(window=20).mean()
     df['MA50'] = df['Close'].rolling(window=50).mean()
     df['MA200'] = df['Close'].rolling(window=200).mean()
-    # Daily percentage change (as a percentage).
-    df['Pct_Move'] = df['Close'].pct_change() * 100  
-    # Volume features: 20-day moving average and ratio.
+    # Daily percentage change (Pct_Move)
+    df['Pct_Move'] = df['Close'].pct_change() * 100
+    # Volume features: 20-day moving average and ratio
     df['Volume_MA20'] = df['Volume'].rolling(window=20).mean()
     df['Volume_Ratio'] = df['Volume'] / df['Volume_MA20']
     
-    # Merge SPY data into ticker DataFrame.
+    # Merge SPY data into ticker DataFrame by date
     df = df.merge(spy_data, left_index=True, right_index=True, how='left')
-    
-    # Drop rows with NaN values.
     df.dropna(inplace=True)
     
     # -----------------------------
     # 3. Scaling / Normalization
     # -----------------------------
-    # Option 1: Global Robust Scaling.
+    # Our feature set and target:
+    # Features: Ticker’s Close, Volume, Volume_MA20, Volume_Ratio, MA20, MA50, MA200, Pct_Move,
+    #           SPY_Close, SPY_MA20, SPY_MA50, SPY_MA200
+    # Target: Ticker’s Close
+    # We'll use our chosen scaling method.
     if scaling_method == "robust":
         print("Using global RobustScaler...")
         features = df[feature_cols].values
@@ -150,18 +164,18 @@ for ticker in tickers:
         scaler_target = RobustScaler()
         scaled_features = scaler_features.fit_transform(features)
         scaled_target = scaler_target.fit_transform(target)
-    # Option 2: Rolling window normalization.
     elif scaling_method == "rolling":
         print("Using rolling window normalization...")
-        # Apply rolling normalization to the specified columns.
-        df_norm = rolling_normalize_columns(df, feature_cols + target_col, rolling_window_size)
-        # Update df to df_norm and extract features & target.
+        all_cols = feature_cols + target_col
+        df_norm, roll_medians, roll_iqrs = rolling_normalize_columns(df, all_cols, rolling_window_size)
         df = df_norm
         features = df[feature_cols].values
         target = df[target_col].values
-        # In this case, the data is already normalized.
-        scaled_features = features
+        scaled_features = features  # Data is already normalized.
         scaled_target = target
+        # Store rolling medians and IQRs for the target column ("Close")
+        rolling_target_median = roll_medians[target_col[0]].values
+        rolling_target_iqr = roll_iqrs[target_col[0]].values
     else:
         raise ValueError("Invalid scaling_method. Use 'robust' or 'rolling'.")
     
@@ -213,24 +227,32 @@ for ticker in tickers:
     
     y_test = target[training_data_len:, :]
     predictions_one_step = model_one_step.predict(x_test)
-    predictions_one_step_inv = scaler_target.inverse_transform(predictions_one_step) if scaling_method == "robust" else predictions_one_step
+    if scaling_method == "robust":
+        predictions_one_step_inv = scaler_target.inverse_transform(predictions_one_step)
+        y_test_inv = scaler_target.inverse_transform(y_test)
+    elif scaling_method == "rolling":
+        # Inverse transform using the stored rolling stats; note that the first prediction corresponds to df.index[training_data_len]
+        r_median_test = rolling_target_median[training_data_len:]
+        r_iqr_test = rolling_target_iqr[training_data_len:]
+        predictions_one_step_inv = predictions_one_step.flatten() * r_iqr_test + r_median_test
+        y_test_inv = y_test.flatten() * r_iqr_test + r_median_test
     print("Predictions (one-step) shape:", predictions_one_step_inv.shape)
     
-    mae_one = mean_absolute_error(y_test, predictions_one_step_inv)
-    mse_one = mean_squared_error(y_test, predictions_one_step_inv)
+    mae_one = mean_absolute_error(y_test_inv, predictions_one_step_inv)
+    mse_one = mean_squared_error(y_test_inv, predictions_one_step_inv)
     rmse_one = np.sqrt(mse_one)
-    mape_one = np.mean(np.abs((y_test - predictions_one_step_inv) / y_test)) * 100
+    mape_one = np.mean(np.abs((y_test_inv - predictions_one_step_inv) / y_test_inv)) * 100
     
     print(f"\nOne-Step Forecast Accuracy Metrics for {ticker}:")
     print(f"MAE:  {mae_one:.4f}")
     print(f"RMSE: {rmse_one:.4f}")
     print(f"MAPE: {mape_one:.2f}%")
     
-    plt.figure(figsize=(14, 7))
+    plt.figure(figsize=(14,7))
     plt.title('Stock Price Prediction (Test Data) - One Step Forecast')
     plt.xlabel('Date')
     plt.ylabel('Close Price USD ($)')
-    plt.plot(df.index[training_data_len:], y_test, label='Actual Price')
+    plt.plot(df.index[training_data_len:], y_test_inv, label='Actual Price')
     plt.plot(df.index[training_data_len:], predictions_one_step_inv, label='Predicted Price')
     plt.legend()
     one_step_pdf = os.path.join(ticker_folder, f"Test_Data_Prediction_{ticker}.pdf")
@@ -278,10 +300,26 @@ for ticker in tickers:
     print("y_test_multi shape:", y_test_multi.shape)
     
     predictions_multi = model_multi_step.predict(x_test_multi)
-    # If using robust scaling, you need to inverse-transform the predictions;
-    # for rolling normalization the data is already normalized.
-    predictions_multi_inv = scaler_target.inverse_transform(predictions_multi) if scaling_method == "robust" else predictions_multi
-    y_test_multi_inv = scaler_target.inverse_transform(y_test_multi) if scaling_method == "robust" else y_test_multi
+    if scaling_method == "robust":
+        predictions_multi_inv = scaler_target.inverse_transform(predictions_multi)
+        y_test_multi_inv = scaler_target.inverse_transform(y_test_multi)
+    elif scaling_method == "rolling":
+        raw_preds_multi = []
+        raw_y_test_multi = []
+        # For multi-step, the first sample corresponds to index training_data_len in df.
+        for i in range(y_test_multi.shape[0]):
+            j = training_data_len + i
+            # Get rolling stats for the forecast horizon
+            median_slice = rolling_target_median[j:j+forecast_horizon]
+            iqr_slice = rolling_target_iqr[j:j+forecast_horizon]
+            raw_pred = predictions_multi[i] * iqr_slice + median_slice
+            raw_y = y_test_multi[i] * iqr_slice + median_slice
+            raw_preds_multi.append(raw_pred)
+            raw_y_test_multi.append(raw_y)
+        raw_preds_multi = np.array(raw_preds_multi)
+        raw_y_test_multi = np.array(raw_y_test_multi)
+        predictions_multi_inv = raw_preds_multi
+        y_test_multi_inv = raw_y_test_multi
     print("Multi-step predictions shape:", predictions_multi_inv.shape)
     
     mae_multi = mean_absolute_error(y_test_multi_inv.flatten(), predictions_multi_inv.flatten())
@@ -295,7 +333,7 @@ for ticker in tickers:
     print(f"MAPE: {mape_multi:.2f}%")
     
     sample_index = 0
-    plt.figure(figsize=(10, 5))
+    plt.figure(figsize=(10,5))
     plt.title('Multi-Step Forecast for One Test Sample')
     plt.xlabel('Forecast Horizon (Days)')
     plt.ylabel('Close Price USD ($)')
