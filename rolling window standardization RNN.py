@@ -13,11 +13,14 @@ from tensorflow.keras.layers import LSTM, Dropout, Dense
 # -----------------------------
 # SETTINGS
 # -----------------------------
-tickers = ['SPY', 'AAPL', 'MSFT', 'MA','V','AXP','CRM','GOOG','NVDA','PLTR','TSLA']  # Expand this list as needed
+tickers = ['SPY', 'AAPL', 'MSFT', 'MA', 'V', 'AXP', 'CRM', 'GOOG', 'NVDA', 'PLTR', 
+           'TSLA','AMD', 'KO','AMZN','META','GOOGL','AVGO','JPM','LLY','UNH',
+           'XOM','COST','NFLX','WMT','PG','JNJ','HD','ABBV','BAC','PM',
+           'CVX','CSCO','ABT','MCD','ORCL','IBM','WFC','PEP','MRK','GE']  # Expand as needed
 start_date = '2010-01-01'
 end_date   = '2020-12-31'
 sequence_length = 60      # Number of prior days used as input
-forecast_horizon = 60     # Predict next 10 days (for multi-step)
+forecast_horizon = 60     # Predict next 60 days (for multi-step)
 output_root = 'RNN forecasts'
 os.makedirs(output_root, exist_ok=True)
 
@@ -36,8 +39,12 @@ target_col = ['Close']
 # -----------------------------
 def rolling_normalize_columns(df, cols, window):
     """
-    For each column in cols, computes the rolling median and IQR over the specified window,
-    and returns a normalized DataFrame along with DataFrames of the rolling medians and IQRs.
+    Computes the rolling median and IQR for each column in cols over the specified window.
+    Returns:
+      - df_norm: DataFrame with normalized columns ((original - median)/IQR)
+      - median_df: DataFrame of the rolling medians for each column
+      - iqr_df: DataFrame of the rolling IQRs for each column.
+    Rows where the rolling window is incomplete are dropped.
     """
     df_norm = df.copy()
     median_dict = {}
@@ -51,10 +58,8 @@ def rolling_normalize_columns(df, cols, window):
         median_dict[col] = median
         iqr_dict[col] = iqr
     df_norm = df_norm.dropna()
-    median_df = pd.DataFrame({col: median_dict[col] for col in cols})
-    iqr_df = pd.DataFrame({col: iqr_dict[col] for col in cols})
-    median_df = median_df.loc[df_norm.index]
-    iqr_df = iqr_df.loc[df_norm.index]
+    median_df = pd.DataFrame({col: median_dict[col] for col in cols}).loc[df_norm.index]
+    iqr_df = pd.DataFrame({col: iqr_dict[col] for col in cols}).loc[df_norm.index]
     return df_norm, median_df, iqr_df
 
 # -----------------------------
@@ -86,7 +91,7 @@ summary_stats = {}
 # PROCESS EACH TICKER
 # -----------------------------
 for ticker in tickers:
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print(f"Processing data for ticker: {ticker}")
     
     # Create ticker folder
@@ -101,7 +106,7 @@ for ticker in tickers:
     print("Data downloaded. Columns:")
     print(data.columns)
     
-    # Handle MultiIndex if needed
+    # Handle MultiIndex if needed:
     if isinstance(data.columns, pd.MultiIndex):
         print("Detected MultiIndex columns. Extracting 'Close' and 'Volume'...")
         if 'Close' in data.columns.levels[0] and 'Volume' in data.columns.levels[0]:
@@ -133,28 +138,31 @@ for ticker in tickers:
     # -----------------------------
     # 2. Additional Features
     # -----------------------------
-    # Ticker’s moving averages
+    # Ticker's moving averages of Close
     df['MA20'] = df['Close'].rolling(window=20).mean()
     df['MA50'] = df['Close'].rolling(window=50).mean()
     df['MA200'] = df['Close'].rolling(window=200).mean()
     # Daily percentage change (Pct_Move)
-    df['Pct_Move'] = df['Close'].pct_change() * 100
+    df['Pct_Move'] = df['Close'].pct_change() * 100  
     # Volume features: 20-day moving average and ratio
     df['Volume_MA20'] = df['Volume'].rolling(window=20).mean()
     df['Volume_Ratio'] = df['Volume'] / df['Volume_MA20']
     
-    # Merge SPY data into ticker DataFrame by date
+    # Merge SPY data with ticker data on date
     df = df.merge(spy_data, left_index=True, right_index=True, how='left')
     df.dropna(inplace=True)
+    
+    # Check if we have enough data after dropna; require at least (rolling_window_size + sequence_length) rows
+    if len(df) < (rolling_window_size + sequence_length):
+        print(f"Insufficient data for {ticker} after preprocessing (only {len(df)} rows). Skipping ticker.")
+        continue
     
     # -----------------------------
     # 3. Scaling / Normalization
     # -----------------------------
-    # Our feature set and target:
-    # Features: Ticker’s Close, Volume, Volume_MA20, Volume_Ratio, MA20, MA50, MA200, Pct_Move,
-    #           SPY_Close, SPY_MA20, SPY_MA50, SPY_MA200
-    # Target: Ticker’s Close
-    # We'll use our chosen scaling method.
+    # Our feature set: Ticker's Close, Volume, Volume_MA20, Volume_Ratio, MA20, MA50, MA200,
+    #                    Pct_Move, SPY_Close, SPY_MA20, SPY_MA50, SPY_MA200.
+    # Target remains Ticker's Close.
     if scaling_method == "robust":
         print("Using global RobustScaler...")
         features = df[feature_cols].values
@@ -168,10 +176,10 @@ for ticker in tickers:
         print("Using rolling window normalization...")
         all_cols = feature_cols + target_col
         df_norm, roll_medians, roll_iqrs = rolling_normalize_columns(df, all_cols, rolling_window_size)
-        df = df_norm
+        df = df_norm  # use normalized dataframe for modeling
         features = df[feature_cols].values
         target = df[target_col].values
-        scaled_features = features  # Data is already normalized.
+        scaled_features = features   # already normalized
         scaled_target = target
         # Store rolling medians and IQRs for the target column ("Close")
         rolling_target_median = roll_medians[target_col[0]].values
@@ -231,7 +239,7 @@ for ticker in tickers:
         predictions_one_step_inv = scaler_target.inverse_transform(predictions_one_step)
         y_test_inv = scaler_target.inverse_transform(y_test)
     elif scaling_method == "rolling":
-        # Inverse transform using the stored rolling stats; note that the first prediction corresponds to df.index[training_data_len]
+        # Inverse using stored rolling stats; align indices with test set.
         r_median_test = rolling_target_median[training_data_len:]
         r_iqr_test = rolling_target_iqr[training_data_len:]
         predictions_one_step_inv = predictions_one_step.flatten() * r_iqr_test + r_median_test
@@ -306,10 +314,8 @@ for ticker in tickers:
     elif scaling_method == "rolling":
         raw_preds_multi = []
         raw_y_test_multi = []
-        # For multi-step, the first sample corresponds to index training_data_len in df.
         for i in range(y_test_multi.shape[0]):
             j = training_data_len + i
-            # Get rolling stats for the forecast horizon
             median_slice = rolling_target_median[j:j+forecast_horizon]
             iqr_slice = rolling_target_iqr[j:j+forecast_horizon]
             raw_pred = predictions_multi[i] * iqr_slice + median_slice
