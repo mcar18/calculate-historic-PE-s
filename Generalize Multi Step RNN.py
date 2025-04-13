@@ -13,7 +13,7 @@ from tensorflow.keras.layers import LSTM, Dropout, Dense
 # -----------------------------
 # SETTINGS
 # -----------------------------
-# List of tickers to analyze. Example list; add more tickers as needed.
+# List of tickers to analyze.
 tickers = ['SPY', 'AAPL', 'MSFT']  
 start_date = '2010-01-01'
 end_date   = '2020-12-31'
@@ -25,11 +25,10 @@ output_root = 'RNN forecasts'
 os.makedirs(output_root, exist_ok=True)
 
 # -----------------------------
-# Download SPY data and compute SPY moving averages
+# Download SPY data and compute its moving averages
 # -----------------------------
 print("Downloading SPY data...")
 spy_data = yf.download("SPY", start=start_date, end=end_date)
-# Process SPY data whether it returns MultiIndex or not.
 if isinstance(spy_data.columns, pd.MultiIndex):
     spy_close = spy_data['Close']
     if isinstance(spy_close, pd.DataFrame):
@@ -70,7 +69,7 @@ for ticker in tickers:
     print("Data downloaded. DataFrame columns:")
     print(data.columns)
     
-    # Handle potential MultiIndex columns:
+    # Handle potential MultiIndex columns.
     if isinstance(data.columns, pd.MultiIndex):
         print("Detected MultiIndex columns. Extracting 'Close' and 'Volume'...")
         if 'Close' in data.columns.levels[0] and 'Volume' in data.columns.levels[0]:
@@ -106,26 +105,28 @@ for ticker in tickers:
     # -----------------------------
     # 2. Add Additional Features:
     #    - 20-day, 50-day, and 200-day Moving Averages of Ticker's Close
-    #    - Merge SPY data (which now has SPY_Close, SPY_MA20, SPY_MA50, SPY_MA200)
+    #    - Daily percentage change relative to previous day (Pct_Move)
+    #    - Merge SPY data (which now includes SPY_Close, SPY_MA20, SPY_MA50, SPY_MA200)
     # -----------------------------
     df['MA20'] = df['Close'].rolling(window=20).mean()
     df['MA50'] = df['Close'].rolling(window=50).mean()
     df['MA200'] = df['Close'].rolling(window=200).mean()
+    df['Pct_Move'] = df['Close'].pct_change() * 100  # Percentage move
     
-    # Merge SPY data into this ticker's dataframe based on date index.
+    # Merge SPY data into the ticker DataFrame (based on the date index)
     df = df.merge(spy_data, left_index=True, right_index=True, how='left')
     
-    # Drop rows with any NaN values (from moving averages or merge)
+    # Drop rows with any NaN values (from moving averages, percentage change, or merge)
     df.dropna(inplace=True)
     
     # -----------------------------
     # 3. Scaling
     # -----------------------------
-    # Features now include:
-    #   - Ticker's Close, Volume, MA20, MA50, MA200,
-    #   - SPY_Close, SPY_MA20, SPY_MA50, SPY_MA200
-    # Target remains the ticker's Close price.
-    features = df[['Close', 'Volume', 'MA20', 'MA50', 'MA200',
+    # Define features and target.
+    # Features include:
+    #   Ticker's Close, Volume, MA20, MA50, MA200, Pct_Move, SPY_Close, SPY_MA20, SPY_MA50, SPY_MA200.
+    # Target remains the ticker's Close.
+    features = df[['Close', 'Volume', 'MA20', 'MA50', 'MA200', 'Pct_Move',
                    'SPY_Close', 'SPY_MA20', 'SPY_MA50', 'SPY_MA200']].values
     target   = df[['Close']].values
     
