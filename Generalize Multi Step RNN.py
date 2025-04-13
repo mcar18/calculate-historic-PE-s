@@ -13,38 +13,40 @@ from tensorflow.keras.layers import LSTM, Dropout, Dense
 # -----------------------------
 # SETTINGS
 # -----------------------------
-# List of tickers to analyze. Expand this list as desired.
-tickers = ['SPY', 'AAPL', 'MSFT']  # Example: for testing; you can include others like ['AAPL', 'MSFT', ...]
+# List of tickers to analyze. Example list; add more tickers as needed.
+tickers = ['SPY', 'AAPL', 'MSFT']  
 start_date = '2010-01-01'
 end_date   = '2020-12-31'
-sequence_length = 60     # Number of prior days used as input
-forecast_horizon = 10    # For multi-step forecast: predict next 10 days
+sequence_length = 60      # Number of prior days used as input
+forecast_horizon = 10     # For multi-step forecast: predict next 10 days
 
 # Root folder where forecasts and charts will be saved.
 output_root = 'RNN forecasts'
 os.makedirs(output_root, exist_ok=True)
 
 # -----------------------------
-# Download SPY data (to merge with every ticker)
+# Download SPY data and compute SPY moving averages
 # -----------------------------
 print("Downloading SPY data...")
 spy_data = yf.download("SPY", start=start_date, end=end_date)
-# Check if the downloaded data has a MultiIndex
+# Process SPY data whether it returns MultiIndex or not.
 if isinstance(spy_data.columns, pd.MultiIndex):
-    # Extract the 'Close' level.
     spy_close = spy_data['Close']
-    # If spy_close is a DataFrame, rename its only column to 'SPY_Close'
     if isinstance(spy_close, pd.DataFrame):
         spy_close.columns = ['SPY_Close']
         spy_data = spy_close
     else:
-        # Otherwise, convert it to a DataFrame with the new column name.
         spy_data = spy_close.to_frame(name='SPY_Close')
 else:
     spy_data = spy_data[['Close']].copy()
     spy_data.rename(columns={'Close': 'SPY_Close'}, inplace=True)
+
+# Compute SPY moving averages
+spy_data['SPY_MA20'] = spy_data['SPY_Close'].rolling(window=20).mean()
+spy_data['SPY_MA50'] = spy_data['SPY_Close'].rolling(window=50).mean()
+spy_data['SPY_MA200'] = spy_data['SPY_Close'].rolling(window=200).mean()
 spy_data.dropna(inplace=True)
-print("SPY data downloaded and processed.")
+print("SPY data downloaded and processed with moving averages.")
 
 # Dictionary for summary metrics
 summary_stats = {}
@@ -68,7 +70,7 @@ for ticker in tickers:
     print("Data downloaded. DataFrame columns:")
     print(data.columns)
     
-    # Handle potential MultiIndex columns
+    # Handle potential MultiIndex columns:
     if isinstance(data.columns, pd.MultiIndex):
         print("Detected MultiIndex columns. Extracting 'Close' and 'Volume'...")
         if 'Close' in data.columns.levels[0] and 'Volume' in data.columns.levels[0]:
@@ -103,25 +105,28 @@ for ticker in tickers:
     
     # -----------------------------
     # 2. Add Additional Features:
-    #    - 20-day, 50-day, and 200-day Moving Averages (of Close)
-    #    - Merge SPY's closing price (as SPY_Close)
+    #    - 20-day, 50-day, and 200-day Moving Averages of Ticker's Close
+    #    - Merge SPY data (which now has SPY_Close, SPY_MA20, SPY_MA50, SPY_MA200)
     # -----------------------------
     df['MA20'] = df['Close'].rolling(window=20).mean()
     df['MA50'] = df['Close'].rolling(window=50).mean()
     df['MA200'] = df['Close'].rolling(window=200).mean()
     
-    # Merge SPY data based on the date index.
+    # Merge SPY data into this ticker's dataframe based on date index.
     df = df.merge(spy_data, left_index=True, right_index=True, how='left')
     
-    # Drop rows with NaN values (from moving averages or the merge)
+    # Drop rows with any NaN values (from moving averages or merge)
     df.dropna(inplace=True)
     
     # -----------------------------
     # 3. Scaling
     # -----------------------------
-    # Features now include: Close, Volume, MA20, MA50, MA200, and SPY_Close.
-    # Target remains the stock's Close price.
-    features = df[['Close', 'Volume', 'MA20', 'MA50', 'MA200', 'SPY_Close']].values
+    # Features now include:
+    #   - Ticker's Close, Volume, MA20, MA50, MA200,
+    #   - SPY_Close, SPY_MA20, SPY_MA50, SPY_MA200
+    # Target remains the ticker's Close price.
+    features = df[['Close', 'Volume', 'MA20', 'MA50', 'MA200',
+                   'SPY_Close', 'SPY_MA20', 'SPY_MA50', 'SPY_MA200']].values
     target   = df[['Close']].values
     
     scaler_features = MinMaxScaler(feature_range=(0, 1))
@@ -142,8 +147,8 @@ for ticker in tickers:
     # -------------------------------------------------------------------
     # SECTION A: ONE-STEP FORECAST (Predict next day Close)
     # -------------------------------------------------------------------
-    train_features = scaled_features[:training_data_len, :]   # shape: (train_rows, num_features)
-    train_target   = scaled_target[:training_data_len, :]       # shape: (train_rows, 1)
+    train_features = scaled_features[:training_data_len, :]  # shape: (train_rows, num_features)
+    train_target   = scaled_target[:training_data_len, :]      # shape: (train_rows, 1)
     
     x_train = []
     y_train = []
