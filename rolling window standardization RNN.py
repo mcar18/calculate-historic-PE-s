@@ -13,14 +13,15 @@ from tensorflow.keras.layers import LSTM, Dropout, Dense
 # -----------------------------
 # SETTINGS
 # -----------------------------
-tickers = ['SPY', 'AAPL', 'MSFT', 'MA', 'V', 'AXP', 'CRM', 'GOOG', 'NVDA', 'PLTR', 
-           'TSLA','AMD', 'KO','AMZN','META','GOOGL','AVGO','JPM','LLY','UNH',
-           'XOM','COST','NFLX','WMT','PG','JNJ','HD','ABBV','BAC','PM',
-           'CVX','CSCO','ABT','MCD','ORCL','IBM','WFC','PEP','MRK','GE']  # Expand as needed
+tickers = ['SPY', 'AAPL', 'MSFT']
+           # Expand as needed ['SPY', 'AAPL', 'MSFT', 'MA', 'V', 'AXP', 'CRM', 'GOOG', 'NVDA', 'PLTR', 
+           #'TSLA','AMD', 'KO','AMZN','META','GOOGL','AVGO','JPM','LLY','UNH',
+           #'XOM','COST','NFLX','WMT','PG','JNJ','HD','ABBV','BAC','PM',
+           #'CVX','CSCO','ABT','MCD','ORCL','IBM','WFC','PEP','MRK','GE']
 start_date = '2010-01-01'
 end_date   = '2020-12-31'
 sequence_length = 60      # Number of prior days used as input
-forecast_horizon = 60     # Predict next 60 days (for multi-step)
+forecast_horizon = 120     # Predict next 60 days (for multi-step)
 output_root = 'RNN forecasts'
 os.makedirs(output_root, exist_ok=True)
 
