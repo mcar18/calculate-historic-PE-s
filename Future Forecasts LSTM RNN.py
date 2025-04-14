@@ -16,8 +16,8 @@ from tensorflow.keras.layers import LSTM, Dropout, Dense
 tickers = ['SPY', 'AAPL', 'MSFT']  # Expand as needed
 start_date = '2010-01-01'
 end_date   = '2025-04-11'
-sequence_length = 365      # Number of prior days used as input
-forecast_horizon = 365     # Predict next 60 days (for multi-step)
+sequence_length = 60      # Number of prior days used as input
+forecast_horizon = 60     # Predict next 60 days (for multi-step)
 output_root = 'RNN forecasts'
 os.makedirs(output_root, exist_ok=True)
 
@@ -26,10 +26,13 @@ scaling_method = "rolling"  # Change to "robust" for global scaling
 rolling_window_size = 20    # Window size for rolling normalization
 
 # Feature and target column names:
-# Note: We've added "SPY_Pct_Return" to include SPY's daily percent return.
-feature_cols = ['Close', 'Volume', 'Volume_MA20', 'Volume_Ratio',
-                'MA20', 'MA50', 'MA200', 'Pct_Move',
-                'SPY_Close', 'SPY_MA20', 'SPY_MA50', 'SPY_MA200', 'SPY_Pct_Return']
+# Existing ticker features plus SPY and new VIX features.
+feature_cols = [
+    'Close', 'Volume', 'Volume_MA20', 'Volume_Ratio',
+    'MA20', 'MA50', 'MA200', 'Pct_Move',
+    'SPY_Close', 'SPY_MA20', 'SPY_MA50', 'SPY_MA200', 'SPY_Pct_Return',
+    'VIX_Close', 'VIX_MA20', 'VIX_MA50', 'VIX_MA200', 'VIX_Pct_Return'
+]
 target_col = ['Close']
 
 # -----------------------------
@@ -75,7 +78,6 @@ if isinstance(spy_data.columns, pd.MultiIndex):
 else:
     spy_data = spy_data[['Close']].copy()
     spy_data.rename(columns={'Close': 'SPY_Close'}, inplace=True)
-
 # Compute SPY moving averages
 spy_data['SPY_MA20'] = spy_data['SPY_Close'].rolling(window=20).mean()
 spy_data['SPY_MA50'] = spy_data['SPY_Close'].rolling(window=50).mean()
@@ -84,6 +86,30 @@ spy_data['SPY_MA200'] = spy_data['SPY_Close'].rolling(window=200).mean()
 spy_data['SPY_Pct_Return'] = spy_data['SPY_Close'].pct_change() * 100
 spy_data.dropna(inplace=True)
 print("SPY data downloaded and processed with moving averages and daily percent return.")
+
+# -----------------------------
+# Download VIX Data and Compute Its Features
+# -----------------------------
+print("Downloading VIX data...")
+vix_data = yf.download("^VIX", start=start_date, end=end_date)
+if isinstance(vix_data.columns, pd.MultiIndex):
+    vix_close = vix_data['Close']
+    if isinstance(vix_close, pd.DataFrame):
+        vix_close.columns = ['VIX_Close']
+        vix_data = vix_close
+    else:
+        vix_data = vix_close.to_frame(name='VIX_Close')
+else:
+    vix_data = vix_data[['Close']].copy()
+    vix_data.rename(columns={'Close': 'VIX_Close'}, inplace=True)
+# Compute VIX moving averages
+vix_data['VIX_MA20'] = vix_data['VIX_Close'].rolling(window=20).mean()
+vix_data['VIX_MA50'] = vix_data['VIX_Close'].rolling(window=50).mean()
+vix_data['VIX_MA200'] = vix_data['VIX_Close'].rolling(window=200).mean()
+# Compute VIX daily percent return (as percentage)
+vix_data['VIX_Pct_Return'] = vix_data['VIX_Close'].pct_change() * 100
+vix_data.dropna(inplace=True)
+print("VIX data downloaded and processed with moving averages and daily percent return.")
 
 # Dictionary to collect summary metrics
 summary_stats = {}
@@ -95,7 +121,7 @@ for ticker in tickers:
     print("\n" + "="*60)
     print(f"Processing data for ticker: {ticker}")
     
-    # Create ticker folder
+    # Create a folder for the current ticker.
     ticker_folder = os.path.join(output_root, ticker)
     os.makedirs(ticker_folder, exist_ok=True)
     
@@ -107,6 +133,7 @@ for ticker in tickers:
     print("Data downloaded. Columns:")
     print(data.columns)
     
+    # Handle MultiIndex columns if present.
     if isinstance(data.columns, pd.MultiIndex):
         print("Detected MultiIndex columns. Extracting 'Close' and 'Volume'...")
         if 'Close' in data.columns.levels[0] and 'Volume' in data.columns.levels[0]:
@@ -118,8 +145,8 @@ for ticker in tickers:
                                    'Volume': df_volume[ticker]})
             else:
                 print("Ticker not found in sub-columns; using first available columns.")
-                df = pd.DataFrame({'Close': df_close.iloc[:,0],
-                                   'Volume': df_volume.iloc[:,0]})
+                df = pd.DataFrame({'Close': df_close.iloc[:, 0],
+                                   'Volume': df_volume.iloc[:, 0]})
         else:
             raise ValueError("MultiIndex detected but required columns not found.")
     else:
@@ -136,7 +163,7 @@ for ticker in tickers:
     print("DataFrame shape:", df.shape)
     
     # -----------------------------
-    # 2. Compute Additional Features
+    # 2. Compute Additional Features for the Ticker
     # -----------------------------
     # Ticker's moving averages.
     df['MA20'] = df['Close'].rolling(window=20).mean()
@@ -148,23 +175,32 @@ for ticker in tickers:
     df['Volume_MA20'] = df['Volume'].rolling(window=20).mean()
     df['Volume_Ratio'] = df['Volume'] / df['Volume_MA20']
     
+    # -----------------------------
+    # 3. Merge External Market Indicators: SPY and VIX
+    # -----------------------------
     # Merge SPY data.
     df = df.merge(spy_data, left_index=True, right_index=True, how='left')
+    # Merge VIX data.
+    df = df.merge(vix_data, left_index=True, right_index=True, how='left')
     df.dropna(inplace=True)
     
-    # Check for sufficient data.
+    # Check if we have enough data.
     if len(df) < (rolling_window_size + sequence_length):
         print(f"Insufficient data for {ticker} after preprocessing (only {len(df)} rows). Skipping ticker.")
         continue
     
     # -----------------------------
-    # 3. Scaling / Normalization
+    # 4. Scaling / Normalization
     # -----------------------------
-    # Feature set now includes SPY_Pct_Return as well.
+    # Our feature set now includes:
+    # Ticker: Close, Volume, Volume_MA20, Volume_Ratio, MA20, MA50, MA200, Pct_Move,
+    # SPY: SPY_Close, SPY_MA20, SPY_MA50, SPY_MA200, SPY_Pct_Return,
+    # VIX: VIX_Close, VIX_MA20, VIX_MA50, VIX_MA200, VIX_Pct_Return
     if scaling_method == "robust":
         print("Using global RobustScaler...")
         features = df[feature_cols].values
         target = df[target_col].values
+        
         scaler_features = RobustScaler()
         scaler_target = RobustScaler()
         scaled_features = scaler_features.fit_transform(features)
@@ -173,12 +209,12 @@ for ticker in tickers:
         print("Using rolling window normalization...")
         all_cols = feature_cols + target_col
         df_norm, roll_medians, roll_iqrs = rolling_normalize_columns(df, all_cols, rolling_window_size)
-        df = df_norm  # Use normalized data.
+        df = df_norm  # Use normalized data for modeling.
         features = df[feature_cols].values
         target = df[target_col].values
         scaled_features = features
         scaled_target = target
-        # Store rolling stats for target ("Close")
+        # Store rolling statistics for the target "Close"
         rolling_target_median = roll_medians[target_col[0]].values
         rolling_target_iqr = roll_iqrs[target_col[0]].values
     else:
@@ -188,7 +224,7 @@ for ticker in tickers:
     print("Scaled target shape:", scaled_target.shape)
     
     # -----------------------------
-    # 4. Train/Test Split
+    # 5. Train/Test Split
     # -----------------------------
     training_data_len = int(np.ceil(len(df) * 0.8))
     print("Training data length (rows):", training_data_len)
@@ -335,7 +371,7 @@ for ticker in tickers:
     print(f"MAPE: {mape_multi:.2f}%")
     
     plt.figure(figsize=(10,5))
-    plt.title('Multi-Step Forecast for One Test Sample')
+    plt.title('Multi-Step Forecast for One Historical Test Sample')
     plt.xlabel('Forecast Horizon (Days)')
     plt.ylabel('Close Price USD ($)')
     forecast_days = np.arange(1, forecast_horizon + 1)
@@ -348,9 +384,9 @@ for ticker in tickers:
     print(f"Multi-Step Forecast chart saved to {multi_step_pdf}")
     
     # -------------------------------------------------------------------
-    # SECTION C: FUTURE MULTI-STEP FORECAST (Forecast Beyond the End Date)
+    # SECTION C: FUTURE MULTI-STEP FORECAST (Beyond End Date)
     # -------------------------------------------------------------------
-    # Use the last sequence from the available (scaled) data to forecast future prices.
+    # Use the last sequence from the available (scaled) data to predict future prices.
     last_sequence = scaled_features[-sequence_length:, :]
     last_sequence = np.expand_dims(last_sequence, axis=0)  # shape: (1, sequence_length, num_features)
     future_predictions = model_multi_step.predict(last_sequence)  # shape: (1, forecast_horizon)
@@ -358,11 +394,11 @@ for ticker in tickers:
     if scaling_method == "robust":
         future_predictions_inv = scaler_target.inverse_transform(future_predictions.reshape(-1,1)).flatten()
     elif scaling_method == "rolling":
-        # For future forecasts, assume the last available rolling stats persist.
+        # For future predictions, we assume the last available rolling statistics hold.
         last_median = rolling_target_median[-1]
         last_iqr = rolling_target_iqr[-1]
         future_predictions_inv = future_predictions * last_iqr + last_median
-    # Create a future date index using business days starting the day after the last available date.
+    # Create future date index starting from the day after the last date.
     last_date = df.index[-1]
     future_dates = pd.date_range(start=last_date + pd.Timedelta(days=1), periods=forecast_horizon, freq='B')
     plt.figure(figsize=(14,7))
