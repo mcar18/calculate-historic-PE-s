@@ -17,7 +17,7 @@ tickers = ['SPY', 'AAPL', 'MSFT']  # Expand as needed
 start_date = '2010-01-01'
 end_date   = '2025-04-11'
 sequence_length = 60      # Number of prior days used as input
-forecast_horizon = 60     # Predict next 60 days (for multi-step)
+forecast_horizon = 365     # Predict next 60 days (for multi-step)
 output_root = 'RNN forecasts'
 os.makedirs(output_root, exist_ok=True)
 
