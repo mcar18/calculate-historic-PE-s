@@ -13,15 +13,11 @@ from tensorflow.keras.layers import LSTM, Dropout, Dense
 # -----------------------------
 # SETTINGS
 # -----------------------------
-tickers = ['SPY', 'AAPL', 'MSFT']
-           # Expand as needed ['SPY', 'AAPL', 'MSFT', 'MA', 'V', 'AXP', 'CRM', 'GOOG', 'NVDA', 'PLTR', 
-           #'TSLA','AMD', 'KO','AMZN','META','GOOGL','AVGO','JPM','LLY','UNH',
-           #'XOM','COST','NFLX','WMT','PG','JNJ','HD','ABBV','BAC','PM',
-           #'CVX','CSCO','ABT','MCD','ORCL','IBM','WFC','PEP','MRK','GE']
+tickers = ['SPY', 'AAPL', 'MSFT', 'MA', 'V', 'AXP', 'CRM', 'GOOG', 'NVDA', 'PLTR', 'TSLA']  # Expand as needed
 start_date = '2010-01-01'
 end_date   = '2020-12-31'
 sequence_length = 60      # Number of prior days used as input
-forecast_horizon = 120     # Predict next 60 days (for multi-step)
+forecast_horizon = 60     # Predict next 60 days (for multi-step)
 output_root = 'RNN forecasts'
 os.makedirs(output_root, exist_ok=True)
 
@@ -30,9 +26,10 @@ scaling_method = "rolling"  # Change to "robust" for global scaling
 rolling_window_size = 20    # Window size for rolling normalization
 
 # Feature and target column names:
+# Now we add "SPY_Pct_Return" to include SPY's daily percent return.
 feature_cols = ['Close', 'Volume', 'Volume_MA20', 'Volume_Ratio',
                 'MA20', 'MA50', 'MA200', 'Pct_Move',
-                'SPY_Close', 'SPY_MA20', 'SPY_MA50', 'SPY_MA200']
+                'SPY_Close', 'SPY_MA20', 'SPY_MA50', 'SPY_MA200', 'SPY_Pct_Return']
 target_col = ['Close']
 
 # -----------------------------
@@ -64,7 +61,7 @@ def rolling_normalize_columns(df, cols, window):
     return df_norm, median_df, iqr_df
 
 # -----------------------------
-# Download SPY Data and Compute Its Moving Averages
+# Download SPY Data and Compute Its Features
 # -----------------------------
 print("Downloading SPY data...")
 spy_data = yf.download("SPY", start=start_date, end=end_date)
@@ -78,12 +75,15 @@ if isinstance(spy_data.columns, pd.MultiIndex):
 else:
     spy_data = spy_data[['Close']].copy()
     spy_data.rename(columns={'Close': 'SPY_Close'}, inplace=True)
+
 # Compute SPY moving averages
 spy_data['SPY_MA20'] = spy_data['SPY_Close'].rolling(window=20).mean()
 spy_data['SPY_MA50'] = spy_data['SPY_Close'].rolling(window=50).mean()
 spy_data['SPY_MA200'] = spy_data['SPY_Close'].rolling(window=200).mean()
+# NEW: Compute SPY daily percent return (as percentage)
+spy_data['SPY_Pct_Return'] = spy_data['SPY_Close'].pct_change() * 100
 spy_data.dropna(inplace=True)
-print("SPY data downloaded and processed with moving averages.")
+print("SPY data downloaded and processed with moving averages and daily percent return.")
 
 # Dictionary to collect summary metrics
 summary_stats = {}
@@ -92,10 +92,10 @@ summary_stats = {}
 # PROCESS EACH TICKER
 # -----------------------------
 for ticker in tickers:
-    print("\n" + "=" * 60)
+    print("\n" + "="*60)
     print(f"Processing data for ticker: {ticker}")
     
-    # Create ticker folder
+    # Create a folder for the current ticker.
     ticker_folder = os.path.join(output_root, ticker)
     os.makedirs(ticker_folder, exist_ok=True)
     
@@ -107,7 +107,7 @@ for ticker in tickers:
     print("Data downloaded. Columns:")
     print(data.columns)
     
-    # Handle MultiIndex if needed:
+    # Handle MultiIndex columns if present.
     if isinstance(data.columns, pd.MultiIndex):
         print("Detected MultiIndex columns. Extracting 'Close' and 'Volume'...")
         if 'Close' in data.columns.levels[0] and 'Volume' in data.columns.levels[0]:
@@ -119,8 +119,8 @@ for ticker in tickers:
                                    'Volume': df_volume[ticker]})
             else:
                 print("Ticker not found in sub-columns; using first available columns.")
-                df = pd.DataFrame({'Close': df_close.iloc[:,0],
-                                   'Volume': df_volume.iloc[:,0]})
+                df = pd.DataFrame({'Close': df_close.iloc[:, 0],
+                                   'Volume': df_volume.iloc[:, 0]})
         else:
             raise ValueError("MultiIndex detected but required columns not found.")
     else:
@@ -137,23 +137,23 @@ for ticker in tickers:
     print("DataFrame shape:", df.shape)
     
     # -----------------------------
-    # 2. Additional Features
+    # 2. Compute Additional Features
     # -----------------------------
-    # Ticker's moving averages of Close
+    # Ticker's moving averages.
     df['MA20'] = df['Close'].rolling(window=20).mean()
     df['MA50'] = df['Close'].rolling(window=50).mean()
     df['MA200'] = df['Close'].rolling(window=200).mean()
-    # Daily percentage change (Pct_Move)
+    # Daily percentage change (Pct_Move).
     df['Pct_Move'] = df['Close'].pct_change() * 100  
-    # Volume features: 20-day moving average and ratio
+    # Volume features: 20-day moving average and ratio.
     df['Volume_MA20'] = df['Volume'].rolling(window=20).mean()
     df['Volume_Ratio'] = df['Volume'] / df['Volume_MA20']
     
-    # Merge SPY data with ticker data on date
+    # Merge SPY data into the ticker DataFrame by date.
     df = df.merge(spy_data, left_index=True, right_index=True, how='left')
     df.dropna(inplace=True)
     
-    # Check if we have enough data after dropna; require at least (rolling_window_size + sequence_length) rows
+    # Check if we have enough data
     if len(df) < (rolling_window_size + sequence_length):
         print(f"Insufficient data for {ticker} after preprocessing (only {len(df)} rows). Skipping ticker.")
         continue
@@ -161,9 +161,9 @@ for ticker in tickers:
     # -----------------------------
     # 3. Scaling / Normalization
     # -----------------------------
-    # Our feature set: Ticker's Close, Volume, Volume_MA20, Volume_Ratio, MA20, MA50, MA200,
-    #                    Pct_Move, SPY_Close, SPY_MA20, SPY_MA50, SPY_MA200.
-    # Target remains Ticker's Close.
+    # Our feature set: Ticker's Close, Volume, Volume_MA20, Volume_Ratio, MA20, MA50, MA200, Pct_Move,
+    #                  SPY_Close, SPY_MA20, SPY_MA50, SPY_MA200, SPY_Pct_Return
+    # Target: Ticker's Close.
     if scaling_method == "robust":
         print("Using global RobustScaler...")
         features = df[feature_cols].values
@@ -177,10 +177,10 @@ for ticker in tickers:
         print("Using rolling window normalization...")
         all_cols = feature_cols + target_col
         df_norm, roll_medians, roll_iqrs = rolling_normalize_columns(df, all_cols, rolling_window_size)
-        df = df_norm  # use normalized dataframe for modeling
+        df = df_norm  # Use the normalized data for modeling.
         features = df[feature_cols].values
         target = df[target_col].values
-        scaled_features = features   # already normalized
+        scaled_features = features  # Data is already normalized.
         scaled_target = target
         # Store rolling medians and IQRs for the target column ("Close")
         rolling_target_median = roll_medians[target_col[0]].values
@@ -240,7 +240,6 @@ for ticker in tickers:
         predictions_one_step_inv = scaler_target.inverse_transform(predictions_one_step)
         y_test_inv = scaler_target.inverse_transform(y_test)
     elif scaling_method == "rolling":
-        # Inverse using stored rolling stats; align indices with test set.
         r_median_test = rolling_target_median[training_data_len:]
         r_iqr_test = rolling_target_iqr[training_data_len:]
         predictions_one_step_inv = predictions_one_step.flatten() * r_iqr_test + r_median_test
