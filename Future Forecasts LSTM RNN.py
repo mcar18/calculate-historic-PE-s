@@ -3,7 +3,7 @@ import yfinance as yf
 import numpy as np
 import pandas as pd
 import matplotlib
-matplotlib.use('Agg')  # Non-interactive backend
+matplotlib.use('Agg')  # Use non-interactive backend for saving plots
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import RobustScaler
 from sklearn.metrics import mean_absolute_error, mean_squared_error
@@ -13,7 +13,7 @@ from tensorflow.keras.layers import LSTM, Dropout, Dense
 # -----------------------------
 # SETTINGS
 # -----------------------------
-tickers = ['SPY', 'AAPL', 'MSFT']  # Expand as needed
+tickers = ['SPY', 'AAPL', 'MSFT']  # Expand as needed, e.g. add 'MA','V','AXP','CRM','GOOG','NVDA','PLTR','TSLA'
 start_date = '2010-01-01'
 end_date   = '2025-04-11'
 sequence_length = 60      # Number of prior days used as input
@@ -21,12 +21,12 @@ forecast_horizon = 60     # Predict next 60 days (for multi-step)
 output_root = 'RNN forecasts'
 os.makedirs(output_root, exist_ok=True)
 
-# Choose scaling method: "robust" (global) or "rolling" (rolling window normalization)
-scaling_method = "rolling"  # Change to "robust" for global scaling
+# Choose scaling method: "robust" (global RobustScaler) or "rolling" (rolling window normalization)
+scaling_method = "rolling"  # Change to "robust" if desired
 rolling_window_size = 20    # Window size for rolling normalization
 
 # Feature and target column names:
-# We now add VIX features in addition to SPY's.
+# We include our ticker's original features as well as SPY and VIX features.
 feature_cols = [
     'Close', 'Volume', 'Volume_MA20', 'Volume_Ratio',
     'MA20', 'MA50', 'MA200', 'Pct_Move',
@@ -40,7 +40,7 @@ target_col = ['Close']
 # -----------------------------
 def rolling_normalize_columns(df, cols, window):
     """
-    For each column in cols, computes the rolling median and IQR over the specified window.
+    Computes the rolling median and IQR for each column in cols over the specified window.
     Returns:
       - df_norm: DataFrame with normalized columns ((original - median)/IQR)
       - median_df: DataFrame of the rolling medians for each column
@@ -153,7 +153,7 @@ for ticker in tickers:
     print(df.head())
     print("DataFrame shape:", df.shape)
     
-    # Ticker-specific features.
+    # Compute ticker-specific moving averages and features.
     df['MA20'] = df['Close'].rolling(window=20).mean()
     df['MA50'] = df['Close'].rolling(window=50).mean()
     df['MA200'] = df['Close'].rolling(window=200).mean()
@@ -271,7 +271,7 @@ for ticker in tickers:
     print(f"One-Step Forecast chart saved to {one_step_pdf}")
     
     # -------------------------
-    # SECTION B: MULTI-STEP FORECAST (Historical Test Sample with Dates and Confidence Bands)
+    # SECTION B: MULTI-STEP FORECAST (Historical Sample with Dates and Confidence Bands)
     # -------------------------
     x_train_multi = []
     y_train_multi = []
@@ -340,12 +340,11 @@ for ticker in tickers:
     print(f"RMSE: {rmse_multi:.4f}")
     print(f"MAPE: {mape_multi:.2f}%")
     
-    # For the historical multi-step forecast chart, use the actual dates.
-    # The first multi-step test sample corresponds to the period starting at df.index[training_data_len] 
-    historical_dates = df.index[training_data_len : training_data_len+forecast_horizon]
-    # For the first test sample:
+    # For the historical multi-step forecast chart, assign actual dates.
+    historical_dates = df.index[training_data_len : training_data_len + forecast_horizon]
     sample_preds = predictions_multi_inv[0]
-    band_offset = sample_preds * (mape_multi / 200.0)  # half MAPE offset in dollars
+    # Now use full MAPE for the confidence band: offset = predicted_value * (MAPE/100)
+    band_offset = sample_preds * (mape_multi / 100.0)
     upper_band = sample_preds + band_offset
     lower_band = sample_preds - band_offset
     
@@ -355,20 +354,20 @@ for ticker in tickers:
     plt.ylabel('Close Price USD ($)')
     plt.plot(historical_dates, y_test_multi_inv[0], 'o-', label='Actual Future Prices')
     plt.plot(historical_dates, sample_preds, 'o-', label='Predicted Future Prices')
-    plt.fill_between(historical_dates, lower_band, upper_band, color='gray', alpha=0.3, label='Confidence Band (± half MAPE)')
+    plt.fill_between(historical_dates, lower_band, upper_band, color='gray', alpha=0.3, label='Confidence Band (± 1 MAPE)')
     plt.legend()
     multi_step_pdf = os.path.join(ticker_folder, f"Multi_Step_Forecast_Sample_{ticker}.pdf")
     plt.savefig(multi_step_pdf)
     plt.close()
     print(f"Multi-Step Forecast chart saved to {multi_step_pdf}")
     
-    # Optional: Compute and print the historical coverage rate of the confidence intervals.
+    # Optional: Compute historical confidence interval coverage.
     coverage_count = 0
     total_points = 0
     for i in range(y_test_multi_inv.shape[0]):
         for j in range(y_test_multi_inv.shape[1]):
             pred_val = predictions_multi_inv[i, j]
-            offset = pred_val * (mape_multi / 200.0)
+            offset = pred_val * (mape_multi / 100.0)
             lower_bound = pred_val - offset
             upper_bound = pred_val + offset
             actual_val = y_test_multi_inv[i, j]
@@ -390,8 +389,7 @@ for ticker in tickers:
         last_median = rolling_target_median[-1]
         last_iqr = rolling_target_iqr[-1]
         future_predictions_inv = future_predictions * last_iqr + last_median
-    # Compute the confidence band for the future predictions.
-    future_band_offset = future_predictions_inv * (mape_multi / 200.0)
+    future_band_offset = future_predictions_inv * (mape_multi / 100.0)
     future_upper = future_predictions_inv + future_band_offset
     future_lower = future_predictions_inv - future_band_offset
     last_date = df.index[-1]
@@ -402,7 +400,7 @@ for ticker in tickers:
     plt.xlabel('Date')
     plt.ylabel('Predicted Close Price USD ($)')
     plt.plot(future_dates, future_predictions_inv, marker='o', color='blue', label='Future Predicted Price')
-    plt.fill_between(future_dates, future_lower, future_upper, color='gray', alpha=0.3, label='Confidence Band (± half MAPE)')
+    plt.fill_between(future_dates, future_lower, future_upper, color='gray', alpha=0.3, label='Confidence Band (± 1 MAPE)')
     plt.legend()
     future_pdf = os.path.join(ticker_folder, f"Future_Multi_Step_Forecast_{ticker}.pdf")
     plt.savefig(future_pdf)
