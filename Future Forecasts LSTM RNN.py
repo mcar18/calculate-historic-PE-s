@@ -27,7 +27,7 @@ rolling_window_size = 20    # Window size for rolling normalization
 
 # New setting: band_multiplier controls the width of the confidence band.
 # For example, 1.5 means the band will be: predicted ± (predicted × (1.5*MAPE/100))
-band_multiplier = 1.75  
+band_multiplier = 1.0  
 
 # Feature and target column names:
 feature_cols = [
