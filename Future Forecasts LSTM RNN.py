@@ -13,7 +13,7 @@ from tensorflow.keras.layers import LSTM, Dropout, Dense
 # -----------------------------
 # SETTINGS
 # -----------------------------
-tickers = ['SPY', 'AAPL', 'MSFT']  # Expand as needed
+tickers = ['SPY', 'AAPL', 'MSFT']  # Expand as needed (e.g. add 'MA', 'V', 'AXP', etc.)
 start_date = '2010-01-01'
 end_date   = '2025-04-11'
 sequence_length = 60      # Number of prior days used as input
@@ -26,7 +26,7 @@ scaling_method = "rolling"  # Change to "robust" for global scaling
 rolling_window_size = 20    # Window size for rolling normalization
 
 # Feature and target column names:
-# Existing ticker features plus SPY and new VIX features.
+# Note: We add SPY_Pct_Return and now also add VIX features.
 feature_cols = [
     'Close', 'Volume', 'Volume_MA20', 'Volume_Ratio',
     'MA20', 'MA50', 'MA200', 'Pct_Move',
@@ -133,7 +133,6 @@ for ticker in tickers:
     print("Data downloaded. Columns:")
     print(data.columns)
     
-    # Handle MultiIndex columns if present.
     if isinstance(data.columns, pd.MultiIndex):
         print("Detected MultiIndex columns. Extracting 'Close' and 'Volume'...")
         if 'Close' in data.columns.levels[0] and 'Volume' in data.columns.levels[0]:
@@ -145,8 +144,8 @@ for ticker in tickers:
                                    'Volume': df_volume[ticker]})
             else:
                 print("Ticker not found in sub-columns; using first available columns.")
-                df = pd.DataFrame({'Close': df_close.iloc[:, 0],
-                                   'Volume': df_volume.iloc[:, 0]})
+                df = pd.DataFrame({'Close': df_close.iloc[:,0],
+                                   'Volume': df_volume.iloc[:,0]})
         else:
             raise ValueError("MultiIndex detected but required columns not found.")
     else:
@@ -178,13 +177,10 @@ for ticker in tickers:
     # -----------------------------
     # 3. Merge External Market Indicators: SPY and VIX
     # -----------------------------
-    # Merge SPY data.
     df = df.merge(spy_data, left_index=True, right_index=True, how='left')
-    # Merge VIX data.
     df = df.merge(vix_data, left_index=True, right_index=True, how='left')
     df.dropna(inplace=True)
     
-    # Check if we have enough data.
     if len(df) < (rolling_window_size + sequence_length):
         print(f"Insufficient data for {ticker} after preprocessing (only {len(df)} rows). Skipping ticker.")
         continue
@@ -192,7 +188,7 @@ for ticker in tickers:
     # -----------------------------
     # 4. Scaling / Normalization
     # -----------------------------
-    # Our feature set now includes:
+    # Feature set now includes:
     # Ticker: Close, Volume, Volume_MA20, Volume_Ratio, MA20, MA50, MA200, Pct_Move,
     # SPY: SPY_Close, SPY_MA20, SPY_MA50, SPY_MA200, SPY_Pct_Return,
     # VIX: VIX_Close, VIX_MA20, VIX_MA50, VIX_MA200, VIX_Pct_Return
@@ -209,12 +205,12 @@ for ticker in tickers:
         print("Using rolling window normalization...")
         all_cols = feature_cols + target_col
         df_norm, roll_medians, roll_iqrs = rolling_normalize_columns(df, all_cols, rolling_window_size)
-        df = df_norm  # Use normalized data for modeling.
+        df = df_norm  # Use the normalized data for modeling.
         features = df[feature_cols].values
         target = df[target_col].values
         scaled_features = features
         scaled_target = target
-        # Store rolling statistics for the target "Close"
+        # Store rolling stats for the target "Close"
         rolling_target_median = roll_medians[target_col[0]].values
         rolling_target_iqr = roll_iqrs[target_col[0]].values
     else:
@@ -384,7 +380,7 @@ for ticker in tickers:
     print(f"Multi-Step Forecast chart saved to {multi_step_pdf}")
     
     # -------------------------------------------------------------------
-    # SECTION C: FUTURE MULTI-STEP FORECAST (Beyond End Date)
+    # SECTION C: FUTURE MULTI-STEP FORECAST (Forecast Beyond the End Date)
     # -------------------------------------------------------------------
     # Use the last sequence from the available (scaled) data to predict future prices.
     last_sequence = scaled_features[-sequence_length:, :]
@@ -394,18 +390,27 @@ for ticker in tickers:
     if scaling_method == "robust":
         future_predictions_inv = scaler_target.inverse_transform(future_predictions.reshape(-1,1)).flatten()
     elif scaling_method == "rolling":
-        # For future predictions, we assume the last available rolling statistics hold.
+        # For future predictions, assume the last available rolling statistics hold.
         last_median = rolling_target_median[-1]
         last_iqr = rolling_target_iqr[-1]
         future_predictions_inv = future_predictions * last_iqr + last_median
-    # Create future date index starting from the day after the last date.
+    # Compute a future confidence band using half the multi-step MAPE.
+    # For each predicted future price p, the band offset = p * (mape_multi/2)/100.
+    band_offset = future_predictions_inv * (mape_multi / 200)
+    future_upper = future_predictions_inv + band_offset
+    future_lower = future_predictions_inv - band_offset
+    
+    # Create future date index starting from the day after the last available date.
     last_date = df.index[-1]
     future_dates = pd.date_range(start=last_date + pd.Timedelta(days=1), periods=forecast_horizon, freq='B')
+    
     plt.figure(figsize=(14,7))
     plt.title(f'Future Multi-Step Forecast for {ticker}')
     plt.xlabel('Date')
     plt.ylabel('Predicted Close Price USD ($)')
-    plt.plot(future_dates, future_predictions_inv, marker='o', label='Future Predicted Price')
+    plt.plot(future_dates, future_predictions_inv, marker='o', color='blue', label='Future Predicted Price')
+    # Shade the area between future_lower and future_upper.
+    plt.fill_between(future_dates, future_lower, future_upper, color='gray', alpha=0.3, label='Confidence Band (± half MAPE)')
     plt.legend()
     future_pdf = os.path.join(ticker_folder, f"Future_Multi_Step_Forecast_{ticker}.pdf")
     plt.savefig(future_pdf)
@@ -422,25 +427,29 @@ for ticker in tickers:
 # -----------------------------
 rows = []
 for ticker, stats in summary_stats.items():
-    row = {("Single Step", "MAE"): stats["Single Step"]["MAE"],
-           ("Single Step", "RMSE"): stats["Single Step"]["RMSE"],
-           ("Single Step", "MAPE"): stats["Single Step"]["MAPE"],
-           ("Multi-Step", "MAE"): stats["Multi-Step"]["MAE"],
-           ("Multi-Step", "RMSE"): stats["Multi-Step"]["RMSE"],
-           ("Multi-Step", "MAPE"): stats["Multi-Step"]["MAPE"],
-           "Ticker": ticker}
+    row = {
+        ("Single Step", "MAE"): stats["Single Step"]["MAE"],
+        ("Single Step", "RMSE"): stats["Single Step"]["RMSE"],
+        ("Single Step", "MAPE"): stats["Single Step"]["MAPE"],
+        ("Multi-Step", "MAE"): stats["Multi-Step"]["MAE"],
+        ("Multi-Step", "RMSE"): stats["Multi-Step"]["RMSE"],
+        ("Multi-Step", "MAPE"): stats["Multi-Step"]["MAPE"],
+        "Ticker": ticker
+    }
     rows.append(row)
 df_summary = pd.DataFrame(rows)
 df_summary.set_index("Ticker", inplace=True)
 df_summary.columns = pd.MultiIndex.from_tuples(df_summary.columns)
 avg_single_mape = df_summary[("Single Step", "MAPE")].mean()
 avg_multi_mape = df_summary[("Multi-Step", "MAPE")].mean()
-avg_row = {("Single Step", "MAE"): np.nan,
-           ("Single Step", "RMSE"): np.nan,
-           ("Single Step", "MAPE"): avg_single_mape,
-           ("Multi-Step", "MAE"): np.nan,
-           ("Multi-Step", "RMSE"): np.nan,
-           ("Multi-Step", "MAPE"): avg_multi_mape}
+avg_row = {
+    ("Single Step", "MAE"): np.nan,
+    ("Single Step", "RMSE"): np.nan,
+    ("Single Step", "MAPE"): avg_single_mape,
+    ("Multi-Step", "MAE"): np.nan,
+    ("Multi-Step", "RMSE"): np.nan,
+    ("Multi-Step", "MAPE"): avg_multi_mape
+}
 df_summary.loc["Average"] = avg_row
 new_index = list(df_summary.index[df_summary.index != "Average"]) + ["Average"]
 df_summary = df_summary.reindex(new_index)
