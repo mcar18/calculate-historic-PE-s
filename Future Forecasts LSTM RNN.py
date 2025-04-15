@@ -16,17 +16,20 @@ from tensorflow.keras.layers import LSTM, Dropout, Dense
 tickers = ['SPY', 'AAPL', 'MSFT']  # Expand as needed, e.g. add 'MA','V','AXP','CRM','GOOG','NVDA','PLTR','TSLA'
 start_date = '2010-01-01'
 end_date   = '2025-04-11'
-sequence_length = 365      # Number of prior days used as input
-forecast_horizon = 365     # Predict next 60 days (for multi-step)
+sequence_length = 60      # Number of prior days used as input
+forecast_horizon = 60     # Predict next 60 days (for multi-step)
 output_root = 'RNN forecasts'
 os.makedirs(output_root, exist_ok=True)
 
 # Choose scaling method: "robust" (global RobustScaler) or "rolling" (rolling window normalization)
-scaling_method = "rolling"  # Change to "robust" if desired
+scaling_method = "rolling"  # Change to "robust" for global scaling
 rolling_window_size = 20    # Window size for rolling normalization
 
+# New setting: band_multiplier controls the width of the confidence band.
+# For example, 1.5 means the band will be: predicted ± (predicted × (1.5*MAPE/100))
+band_multiplier = 1.75  
+
 # Feature and target column names:
-# We include our ticker's original features as well as SPY and VIX features.
 feature_cols = [
     'Close', 'Volume', 'Volume_MA20', 'Volume_Ratio',
     'MA20', 'MA50', 'MA200', 'Pct_Move',
@@ -340,11 +343,12 @@ for ticker in tickers:
     print(f"RMSE: {rmse_multi:.4f}")
     print(f"MAPE: {mape_multi:.2f}%")
     
-    # For the historical multi-step forecast chart, assign actual dates.
+    # Create historical multi-step forecast chart with dates and confidence bands.
+    # Use actual dates corresponding to the forecast horizon.
     historical_dates = df.index[training_data_len : training_data_len + forecast_horizon]
     sample_preds = predictions_multi_inv[0]
-    # Now use full MAPE for the confidence band: offset = predicted_value * (MAPE/100)
-    band_offset = sample_preds * (mape_multi / 100.0)
+    # Compute confidence band using the new band_multiplier: offset = predicted_value * (band_multiplier * MAPE / 100)
+    band_offset = sample_preds * (band_multiplier * mape_multi / 100.0)
     upper_band = sample_preds + band_offset
     lower_band = sample_preds - band_offset
     
@@ -354,20 +358,20 @@ for ticker in tickers:
     plt.ylabel('Close Price USD ($)')
     plt.plot(historical_dates, y_test_multi_inv[0], 'o-', label='Actual Future Prices')
     plt.plot(historical_dates, sample_preds, 'o-', label='Predicted Future Prices')
-    plt.fill_between(historical_dates, lower_band, upper_band, color='gray', alpha=0.3, label='Confidence Band (± 1 MAPE)')
+    plt.fill_between(historical_dates, lower_band, upper_band, color='gray', alpha=0.3, label=f'Confidence Band (± {band_multiplier} MAPE)')
     plt.legend()
     multi_step_pdf = os.path.join(ticker_folder, f"Multi_Step_Forecast_Sample_{ticker}.pdf")
     plt.savefig(multi_step_pdf)
     plt.close()
     print(f"Multi-Step Forecast chart saved to {multi_step_pdf}")
     
-    # Optional: Compute historical confidence interval coverage.
+    # Optional: Compute empirical coverage rate for historical multi-step confidence intervals.
     coverage_count = 0
     total_points = 0
     for i in range(y_test_multi_inv.shape[0]):
         for j in range(y_test_multi_inv.shape[1]):
             pred_val = predictions_multi_inv[i, j]
-            offset = pred_val * (mape_multi / 100.0)
+            offset = pred_val * (band_multiplier * mape_multi / 100.0)
             lower_bound = pred_val - offset
             upper_bound = pred_val + offset
             actual_val = y_test_multi_inv[i, j]
@@ -378,7 +382,7 @@ for ticker in tickers:
     print(f"Historical Confidence Interval Coverage Rate: {coverage_rate:.2f}%")
     
     # -------------------------
-    # SECTION C: FUTURE MULTI-STEP FORECAST (Beyond End Date)
+    # SECTION C: FUTURE MULTI-STEP FORECAST (Beyond End Date with Confidence Bands)
     # -------------------------
     last_sequence = scaled_features[-sequence_length:, :]
     last_sequence = np.expand_dims(last_sequence, axis=0)
@@ -389,7 +393,7 @@ for ticker in tickers:
         last_median = rolling_target_median[-1]
         last_iqr = rolling_target_iqr[-1]
         future_predictions_inv = future_predictions * last_iqr + last_median
-    future_band_offset = future_predictions_inv * (mape_multi / 100.0)
+    future_band_offset = future_predictions_inv * (band_multiplier * mape_multi / 100.0)
     future_upper = future_predictions_inv + future_band_offset
     future_lower = future_predictions_inv - future_band_offset
     last_date = df.index[-1]
@@ -400,7 +404,7 @@ for ticker in tickers:
     plt.xlabel('Date')
     plt.ylabel('Predicted Close Price USD ($)')
     plt.plot(future_dates, future_predictions_inv, marker='o', color='blue', label='Future Predicted Price')
-    plt.fill_between(future_dates, future_lower, future_upper, color='gray', alpha=0.3, label='Confidence Band (± 1 MAPE)')
+    plt.fill_between(future_dates, future_lower, future_upper, color='gray', alpha=0.3, label=f'Confidence Band (± {band_multiplier} MAPE)')
     plt.legend()
     future_pdf = os.path.join(ticker_folder, f"Future_Multi_Step_Forecast_{ticker}.pdf")
     plt.savefig(future_pdf)
