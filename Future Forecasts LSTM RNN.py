@@ -13,11 +13,14 @@ from tensorflow.keras.layers import LSTM, Dropout, Dense
 # -----------------------------
 # SETTINGS
 # -----------------------------
-tickers = ['SPY', 'AAPL', 'MSFT']  # Expand as needed, e.g. add 'MA','V','AXP','CRM','GOOG','NVDA','PLTR','TSLA'
+tickers = ['SPY', 'AAPL', 'MSFT', 'MA', 'V', 'AXP', 'CRM', 'GOOG', 'NVDA', 'IBKR', 
+           'TSLA','AMD', 'KO','AMZN','META','GOOGL','AVGO','JPM','LLY','UNH',
+           'XOM','COST','NFLX','WMT','PG','JNJ','HD','ABBV','BAC','PM',
+           'CVX','CSCO','ABT','MCD','ORCL','IBM','WFC','PEP','MRK','GE']  # Expand as needed, e.g. add 'MA','V','AXP','CRM','GOOG','NVDA','PLTR','TSLA'
 start_date = '2010-01-01'
 end_date   = '2025-04-11'
-sequence_length = 60      # Number of prior days used as input
-forecast_horizon = 60     # Predict next 60 days (for multi-step)
+sequence_length = 365      # Number of prior days used as input
+forecast_horizon = 365     # Predict next 60 days (for multi-step)
 output_root = 'RNN forecasts'
 os.makedirs(output_root, exist_ok=True)
 
@@ -27,7 +30,7 @@ rolling_window_size = 20    # Window size for rolling normalization
 
 # New setting: band_multiplier controls the width of the confidence band.
 # For example, 1.5 means the band will be: predicted ± (predicted × (1.5*MAPE/100))
-band_multiplier = 1.0  
+band_multiplier = 1.75  
 
 # Feature and target column names:
 feature_cols = [
