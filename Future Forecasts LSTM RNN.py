@@ -26,7 +26,7 @@ scaling_method = "rolling"  # Change to "robust" for global scaling
 rolling_window_size = 20    # Window size for rolling normalization
 
 # Feature and target column names:
-# Now we add "SPY_Pct_Return" and VIX features.
+# We now add VIX features in addition to SPY's.
 feature_cols = [
     'Close', 'Volume', 'Volume_MA20', 'Volume_Ratio',
     'MA20', 'MA50', 'MA200', 'Pct_Move',
@@ -40,7 +40,7 @@ target_col = ['Close']
 # -----------------------------
 def rolling_normalize_columns(df, cols, window):
     """
-    Computes the rolling median and IQR for each column in cols over the specified window.
+    For each column in cols, computes the rolling median and IQR over the specified window.
     Returns:
       - df_norm: DataFrame with normalized columns ((original - median)/IQR)
       - median_df: DataFrame of the rolling medians for each column
@@ -136,8 +136,8 @@ for ticker in tickers:
                                    'Volume': df_volume[ticker]})
             else:
                 print("Ticker not found in sub-columns; using first available columns.")
-                df = pd.DataFrame({'Close': df_close.iloc[:, 0],
-                                   'Volume': df_volume.iloc[:, 0]})
+                df = pd.DataFrame({'Close': df_close.iloc[:,0],
+                                   'Volume': df_volume.iloc[:,0]})
         else:
             raise ValueError("MultiIndex detected but required columns not found.")
     else:
@@ -153,7 +153,7 @@ for ticker in tickers:
     print(df.head())
     print("DataFrame shape:", df.shape)
     
-    # Compute ticker-specific moving averages and features.
+    # Ticker-specific features.
     df['MA20'] = df['Close'].rolling(window=20).mean()
     df['MA50'] = df['Close'].rolling(window=50).mean()
     df['MA200'] = df['Close'].rolling(window=200).mean()
@@ -161,7 +161,7 @@ for ticker in tickers:
     df['Volume_MA20'] = df['Volume'].rolling(window=20).mean()
     df['Volume_Ratio'] = df['Volume'] / df['Volume_MA20']
     
-    # Merge SPY and VIX external features.
+    # Merge external indicators: SPY and VIX.
     df = df.merge(spy_data, left_index=True, right_index=True, how='left')
     df = df.merge(vix_data, left_index=True, right_index=True, how='left')
     df.dropna(inplace=True)
@@ -199,11 +199,12 @@ for ticker in tickers:
     training_data_len = int(np.ceil(len(df) * 0.8))
     print("Training data length (rows):", training_data_len)
     
-    # -------------------
-    # ONE-STEP FORECAST
-    # -------------------
+    # -------------------------
+    # SECTION A: ONE-STEP FORECAST
+    # -------------------------
     train_features = scaled_features[:training_data_len, :]
     train_target = scaled_target[:training_data_len, :]
+    
     x_train = []
     y_train = []
     for i in range(sequence_length, len(train_features)):
@@ -270,7 +271,7 @@ for ticker in tickers:
     print(f"One-Step Forecast chart saved to {one_step_pdf}")
     
     # -------------------------
-    # MULTI-STEP FORECAST (Historical Sample)
+    # SECTION B: MULTI-STEP FORECAST (Historical Test Sample with Dates and Confidence Bands)
     # -------------------------
     x_train_multi = []
     y_train_multi = []
@@ -339,31 +340,49 @@ for ticker in tickers:
     print(f"RMSE: {rmse_multi:.4f}")
     print(f"MAPE: {mape_multi:.2f}%")
     
-    # Modify the historical multi-step forecast chart to add a band.
-    plt.figure(figsize=(10,5))
-    plt.title('Multi-Step Forecast for One Historical Test Sample')
-    plt.xlabel('Forecast Horizon (Days)')
-    plt.ylabel('Close Price USD ($)')
-    forecast_days = np.arange(1, forecast_horizon + 1)
-    # Compute confidence band: for each day in the forecast, band offset = predicted value * (mape_multi/200)
+    # For the historical multi-step forecast chart, use the actual dates.
+    # The first multi-step test sample corresponds to the period starting at df.index[training_data_len] 
+    historical_dates = df.index[training_data_len : training_data_len+forecast_horizon]
+    # For the first test sample:
     sample_preds = predictions_multi_inv[0]
-    band_offset = sample_preds * (mape_multi / 200.0)
+    band_offset = sample_preds * (mape_multi / 200.0)  # half MAPE offset in dollars
     upper_band = sample_preds + band_offset
     lower_band = sample_preds - band_offset
-    plt.plot(forecast_days, y_test_multi_inv[0], 'o-', label='Actual Future Prices')
-    plt.plot(forecast_days, sample_preds, 'o-', label='Predicted Future Prices')
-    plt.fill_between(forecast_days, lower_band, upper_band, color='gray', alpha=0.3, label='Confidence Band (± half MAPE)')
+    
+    plt.figure(figsize=(10,5))
+    plt.title('Multi-Step Forecast (Historical Sample) with Confidence Band')
+    plt.xlabel('Date')
+    plt.ylabel('Close Price USD ($)')
+    plt.plot(historical_dates, y_test_multi_inv[0], 'o-', label='Actual Future Prices')
+    plt.plot(historical_dates, sample_preds, 'o-', label='Predicted Future Prices')
+    plt.fill_between(historical_dates, lower_band, upper_band, color='gray', alpha=0.3, label='Confidence Band (± half MAPE)')
     plt.legend()
     multi_step_pdf = os.path.join(ticker_folder, f"Multi_Step_Forecast_Sample_{ticker}.pdf")
     plt.savefig(multi_step_pdf)
     plt.close()
     print(f"Multi-Step Forecast chart saved to {multi_step_pdf}")
     
+    # Optional: Compute and print the historical coverage rate of the confidence intervals.
+    coverage_count = 0
+    total_points = 0
+    for i in range(y_test_multi_inv.shape[0]):
+        for j in range(y_test_multi_inv.shape[1]):
+            pred_val = predictions_multi_inv[i, j]
+            offset = pred_val * (mape_multi / 200.0)
+            lower_bound = pred_val - offset
+            upper_bound = pred_val + offset
+            actual_val = y_test_multi_inv[i, j]
+            if lower_bound <= actual_val <= upper_bound:
+                coverage_count += 1
+            total_points += 1
+    coverage_rate = (coverage_count / total_points) * 100
+    print(f"Historical Confidence Interval Coverage Rate: {coverage_rate:.2f}%")
+    
     # -------------------------
     # SECTION C: FUTURE MULTI-STEP FORECAST (Beyond End Date)
     # -------------------------
     last_sequence = scaled_features[-sequence_length:, :]
-    last_sequence = np.expand_dims(last_sequence, axis=0)  # shape: (1, sequence_length, num_features)
+    last_sequence = np.expand_dims(last_sequence, axis=0)
     future_predictions = model_multi_step.predict(last_sequence).flatten()
     if scaling_method == "robust":
         future_predictions_inv = scaler_target.inverse_transform(future_predictions.reshape(-1,1)).flatten()
@@ -371,12 +390,13 @@ for ticker in tickers:
         last_median = rolling_target_median[-1]
         last_iqr = rolling_target_iqr[-1]
         future_predictions_inv = future_predictions * last_iqr + last_median
-    # Compute confidence band for future forecast.
+    # Compute the confidence band for the future predictions.
     future_band_offset = future_predictions_inv * (mape_multi / 200.0)
     future_upper = future_predictions_inv + future_band_offset
     future_lower = future_predictions_inv - future_band_offset
     last_date = df.index[-1]
     future_dates = pd.date_range(start=last_date + pd.Timedelta(days=1), periods=forecast_horizon, freq='B')
+    
     plt.figure(figsize=(14,7))
     plt.title(f'Future Multi-Step Forecast for {ticker}')
     plt.xlabel('Date')
@@ -391,7 +411,7 @@ for ticker in tickers:
     
     summary_stats[ticker] = {
         "Single Step": {"MAE": mae_one, "RMSE": rmse_one, "MAPE": mape_one},
-        "Multi-Step": {"MAE": mae_multi, "RMSE": rmse_multi, "MAPE": mape_multi}
+        "Multi-Step": {"MAE": mae_multi, "RMSE": rmse_multi, "MAPE": mape_multi, "Coverage": coverage_rate}
     }
 
 # -----------------------------
@@ -399,25 +419,32 @@ for ticker in tickers:
 # -----------------------------
 rows = []
 for ticker, stats in summary_stats.items():
-    row = {("Single Step", "MAE"): stats["Single Step"]["MAE"],
-           ("Single Step", "RMSE"): stats["Single Step"]["RMSE"],
-           ("Single Step", "MAPE"): stats["Single Step"]["MAPE"],
-           ("Multi-Step", "MAE"): stats["Multi-Step"]["MAE"],
-           ("Multi-Step", "RMSE"): stats["Multi-Step"]["RMSE"],
-           ("Multi-Step", "MAPE"): stats["Multi-Step"]["MAPE"],
-           "Ticker": ticker}
+    row = {
+        ("Single Step", "MAE"): stats["Single Step"]["MAE"],
+        ("Single Step", "RMSE"): stats["Single Step"]["RMSE"],
+        ("Single Step", "MAPE"): stats["Single Step"]["MAPE"],
+        ("Multi-Step", "MAE"): stats["Multi-Step"]["MAE"],
+        ("Multi-Step", "RMSE"): stats["Multi-Step"]["RMSE"],
+        ("Multi-Step", "MAPE"): stats["Multi-Step"]["MAPE"],
+        ("Multi-Step", "Coverage Rate (%)"): stats["Multi-Step"].get("Coverage", np.nan),
+        "Ticker": ticker
+    }
     rows.append(row)
 df_summary = pd.DataFrame(rows)
 df_summary.set_index("Ticker", inplace=True)
 df_summary.columns = pd.MultiIndex.from_tuples(df_summary.columns)
 avg_single_mape = df_summary[("Single Step", "MAPE")].mean()
 avg_multi_mape = df_summary[("Multi-Step", "MAPE")].mean()
-avg_row = {("Single Step", "MAE"): np.nan,
-           ("Single Step", "RMSE"): np.nan,
-           ("Single Step", "MAPE"): avg_single_mape,
-           ("Multi-Step", "MAE"): np.nan,
-           ("Multi-Step", "RMSE"): np.nan,
-           ("Multi-Step", "MAPE"): avg_multi_mape}
+avg_coverage = df_summary[("Multi-Step", "Coverage Rate (%)")].mean()
+avg_row = {
+    ("Single Step", "MAE"): np.nan,
+    ("Single Step", "RMSE"): np.nan,
+    ("Single Step", "MAPE"): avg_single_mape,
+    ("Multi-Step", "MAE"): np.nan,
+    ("Multi-Step", "RMSE"): np.nan,
+    ("Multi-Step", "MAPE"): avg_multi_mape,
+    ("Multi-Step", "Coverage Rate (%)"): avg_coverage
+}
 df_summary.loc["Average"] = avg_row
 new_index = list(df_summary.index[df_summary.index != "Average"]) + ["Average"]
 df_summary = df_summary.reindex(new_index)
